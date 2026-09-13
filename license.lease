@@ -1,0 +1,11 @@
+{
+  "payload": {
+    "hwid": "48b26000d14d207b8b916b6aa0c091f5fb0778ad8129fd73d6868244b67d0ad7",
+    "issued_at": 1789282974.85,
+    "expires_at": 1789542174.85,
+    "max_offline_hours": 72.0,
+    "license_type": "development",
+    "issuer": "Antigravity Licensing Authority"
+  },
+  "signature": "aXBLomQmU87ZTOrNjjS+OtW4hoIebDYZD70MQhp8jUQnZM79gp1cUuR105FYVfaylr+W6YoGdkUo4lQJ7b70uIAKfdVR/xSXG+hJSJU4FOBzzzye5/LGK9uy0cTgh2JLzGsjL2vXna77k9ehCtEHOp3ELfr/nS606umKbfnRBb32JLmZgmCNRpqnIxpgx3mVhpFyXKxqVrVf/hkD9mHybbKts549GDmTy3TbSbbOsOrxCBbGg6A35wMkCE0PAnnLmxwDn18jHWJ2dHlkQ15TYf7sEg+E04HyL7OuSvArQIQteRJeb1mSHVYp80vbKpkgAf35GT+b15qQHpQ9Jo7rlw=="
+}

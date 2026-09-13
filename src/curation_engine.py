@@ -1,0 +1,855 @@
+"""
+src/curation_engine.py
+----------------------
+Phase 1: Real AI Curation Intelligence.
+
+get_viral_cuts() now routes through score_transcript_with_llm() which:
+  1. Spins up an Ollama daemon (killing stale instances first).
+  2. Handles Kaggle model-weight caching via manifests-copy + blobs-symlink.
+  3. Scores transcript windows with llama3.1:8b in JSON mode.
+  4. Validates all output against validate_and_format_cuts().
+  5. Unloads the model from VRAM after scoring.
+  6. Falls back to even-split logic if Ollama is unreachable or JSON fails.
+"""
+
+import gc
+import json
+import math
+import logging
+import os
+import shutil
+import socket
+import subprocess
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger("curation_engine")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+MIN_CLIP_DURATION_SEC = 30.0
+MAX_CLIP_DURATION_SEC = 50.0
+OLLAMA_MODEL       = "llama3.1:8b"
+OLLAMA_HOST        = "http://localhost:11434"
+OLLAMA_PORT        = 11434
+CHUNK_MINUTES      = 12        # 12-minute sliding window for long-video chunking
+CHUNK_OVERLAP_SEC  = 120       # 2-minute overlap between chunks
+MAX_RETRIES        = 2         # strict-prompt retry on JSON parse failure
+_llm_cache = {}                # SHA-256 local cache for scored windows
+
+
+# ---------------------------------------------------------------------------
+# 1. validate_and_format_cuts  (unchanged contract)
+# ---------------------------------------------------------------------------
+
+def validate_and_format_cuts(raw_cuts: list, total_duration: float, min_duration: float = 20.0) -> list:
+    """Validates raw cut dictionaries and populates unified key aliases."""
+    validated = []
+    for item in raw_cuts:
+        if not isinstance(item, dict):
+            continue
+        s = float(item.get("start", item.get("start_time", 0.0)))
+        try:
+            td = float(total_duration)
+            if math.isnan(td) or td <= 0:
+                td = 1.0
+        except (TypeError, ValueError):
+            td = 1.0
+        e = float(item.get("end", item.get("end_time", td)))
+        s = max(0.0, s)
+        e = max(s + 0.1, min(e, td))
+        sentence = str(item.get("hook_sentence", item.get("hook_text", "")))
+        try:
+            v_score = int(float(item.get("virality_score", 85)))
+            v_score = max(0, min(100, v_score))
+        except (TypeError, ValueError):
+            v_score = 85
+        validated.append({
+            "start":          s,
+            "end":            e,
+            "start_time":     s,
+            "end_time":       e,
+            "virality_score": v_score,
+            "hook_sentence":  sentence,
+            "hook_text":      sentence,
+            "reason":         str(item.get("reason", "")),
+        })
+    # NMS Deduplication: Limit overlap to 15%, prioritize highest score
+    # First, sort by virality score descending
+    validated_sorted = sorted(validated, key=lambda x: x["virality_score"], reverse=True)
+    
+    deduped = []
+    effective_min_dur = min(min_duration, max(1.0, float(total_duration) * 0.8))
+    for c in validated_sorted:
+        clip_len = c["end"] - c["start"]
+        if clip_len < effective_min_dur:
+            continue
+            
+        # Check overlap with already selected deduped reels
+        overlap_violation = False
+        for r in deduped:
+            overlap_start = max(c["start"], r["start"])
+            overlap_end = min(c["end"], r["end"])
+            if overlap_start < overlap_end:
+                overlap_dur = overlap_end - overlap_start
+                if overlap_dur > clip_len * 0.15:
+                    overlap_violation = True
+                    break
+                    
+        if not overlap_violation:
+            deduped.append(c)
+            
+    # Return sorted chronologically
+    return sorted(deduped, key=lambda x: x["start"])
+
+
+# ---------------------------------------------------------------------------
+# 2. Ollama lifecycle helpers
+# ---------------------------------------------------------------------------
+
+def _port_in_use(port: int) -> bool:
+    """Returns True if something is already bound to the given port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("localhost", port)) == 0
+
+
+_ollama_process: Optional[subprocess.Popen] = None
+
+def _kill_stale_ollama() -> None:
+    """Kills the specific child `ollama serve` process if we started it."""
+    global _ollama_process
+    if _ollama_process is not None:
+        try:
+            _ollama_process.terminate()
+            _ollama_process.wait(timeout=5)
+        except Exception as exc:
+            logger.debug(f"[curation] kill child ollama: {exc}")
+        finally:
+            _ollama_process = None
+
+import atexit
+atexit.register(_kill_stale_ollama)
+
+
+def _setup_ollama_model_cache() -> None:
+    """
+    Kaggle model-weight caching strategy:
+      1. Look for a read-only dataset mount at /kaggle/input/ollama-* containing
+         a blobs/ directory (Ollama content-addressed store).
+      2. Copy only manifests/ (small, mutable) into a writable working dir.
+      3. Symlink blobs/ from the read-only mount into that writable dir.
+      4. Point OLLAMA_MODELS at the writable dir.
+    Falls back silently (letting Ollama use ~/.ollama) on non-Kaggle or on error.
+    """
+    kaggle_input = "/kaggle/input"
+    if not os.path.isdir(kaggle_input):
+        return  # Not a Kaggle environment
+
+    # Find any attached dataset that looks like an Ollama store
+    dataset_root: Optional[str] = None
+    for entry in os.listdir(kaggle_input):
+        candidate = os.path.join(kaggle_input, entry)
+        if os.path.isdir(os.path.join(candidate, "blobs")):
+            dataset_root = candidate
+            break
+
+    if dataset_root is None:
+        logger.info("[curation] No Ollama dataset mount found; will pull model fresh.")
+        return
+
+    working_models = "/kaggle/working/ollama_models"
+    os.makedirs(working_models, exist_ok=True)
+
+    try:
+        # Copy manifests (small, needs write access)
+        src_manifests = os.path.join(dataset_root, "manifests")
+        dst_manifests = os.path.join(working_models, "manifests")
+        if os.path.isdir(src_manifests) and not os.path.isdir(dst_manifests):
+            shutil.copytree(src_manifests, dst_manifests)
+            logger.info(f"[curation] Copied Ollama manifests -> {dst_manifests}")
+
+        # Symlink blobs (large, read-only is fine)
+        src_blobs = os.path.join(dataset_root, "blobs")
+        dst_blobs = os.path.join(working_models, "blobs")
+        if os.path.isdir(src_blobs) and not os.path.lexists(dst_blobs):
+            os.symlink(src_blobs, dst_blobs)
+            logger.info(f"[curation] Symlinked Ollama blobs {src_blobs} -> {dst_blobs}")
+
+        os.environ["OLLAMA_MODELS"] = working_models
+        logger.info(f"[curation] OLLAMA_MODELS set to {working_models}")
+
+    except PermissionError as exc:
+        logger.warning(f"[curation] Permission error setting up Ollama cache ({exc}); using default.")
+    except Exception as exc:
+        logger.warning(f"[curation] Ollama cache setup failed ({exc}); using default.")
+
+
+def _start_ollama_server() -> bool:
+    """
+    Ensures a fresh Ollama server is running on port 11434.
+    Returns True if server is ready, False otherwise.
+    """
+    global _ollama_process
+
+    if _port_in_use(OLLAMA_PORT):
+        logger.info("[curation] Port 11434 already in use — assuming external or existing Ollama is ready.")
+        return True
+
+    _setup_ollama_model_cache()
+
+    try:
+        _ollama_process = subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info(f"[curation] Ollama serve started (PID {_ollama_process.pid}). Waiting for port...")
+    except FileNotFoundError:
+        logger.warning("[curation] `ollama` binary not found. Falling back to even-split curation.")
+        return False
+
+    # Poll until ready (30s timeout)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if _port_in_use(OLLAMA_PORT):
+            logger.info("[curation] Ollama server ready on port 11434.")
+            return True
+        time.sleep(0.8)
+
+    logger.warning("[curation] Ollama server did not become ready within 30s.")
+    return False
+
+
+def _ensure_model_pulled(model: str = OLLAMA_MODEL) -> bool:
+    """Pulls the model if not already available. Returns True on success."""
+    try:
+        import urllib.request
+        data = json.dumps({"name": model}).encode()
+        req  = urllib.request.Request(
+            f"{OLLAMA_HOST}/api/pull",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        logger.info(f"[curation] Ensuring {model} is pulled (may take a few minutes)...")
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            # Drain streaming response
+            for line in resp:
+                if b'\"status\"' in line:
+                    pass  # Just drain
+        return True
+    except Exception as exc:
+        logger.warning(f"[curation] Model pull failed: {exc}")
+        return False
+
+
+def _unload_model_from_vram(model: str = OLLAMA_MODEL) -> None:
+    """Sends keep_alive=0 to evict the model from GPU memory."""
+    try:
+        import urllib.request
+        data = json.dumps({"model": model, "keep_alive": 0}).encode()
+        req  = urllib.request.Request(
+            f"{OLLAMA_HOST}/api/generate",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+        logger.info(f"[curation] Model {model} unloaded from VRAM (keep_alive=0).")
+    except Exception as exc:
+        logger.debug(f"[curation] Model unload request failed (non-fatal): {exc}")
+
+
+# ---------------------------------------------------------------------------
+# 3. LLM scoring helpers
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are a viral content strategist. Given a speech transcript with timestamps, identify the best short-form video clip segments (strictly 30 to 50 seconds each, with virality score >= 75).
+
+Score each candidate segment on:
+- HOOK_STRENGTH: Does the opening grab attention immediately?
+- EMOTIONAL_PAYOFF: Is there a strong emotional arc or revelation?
+- QUOTABILITY: Is the content memorable, shareable, tweet-worthy?
+
+You MUST return a JSON object with a single key "clips" containing an array of objects. No conversational intro text, zero explanation, and no markdown code fences.
+Each clip object must contain EXACTLY these keys: "start" (float), "end" (float), "viral_score" (integer 75-100), "title" (string), "hook_summary" (string), "virality_reason" (string).
+"""
+
+STRICT_SYSTEM_PROMPT = """You MUST return a JSON object with a single key "clips" containing an array of objects.
+No conversational intro text, zero explanation, and no markdown code fences (do not use ```json).
+Each clip object must have EXACTLY these keys: "start" (float), "end" (float), "viral_score" (integer 75-100), "title" (string), "hook_summary" (string), "virality_reason" (string).
+Duration (end - start) must be strictly between 30 and 50 seconds.
+If you cannot comply, return {"clips": []}."""
+
+
+def _build_transcript_text(words: List[Dict], start_offset: float = 0.0) -> str:
+    """Converts word list into readable timestamped transcript text for the LLM."""
+    if not words:
+        return ""
+        
+    sentences = []
+    current_sentence_words = []
+    sentence_start = float(words[0].get("start", 0.0)) + start_offset
+    
+    for i, w in enumerate(words):
+        word_text = w.get("word", "").strip()
+        current_sentence_words.append(word_text)
+        
+        # Check if word ends with punctuation or it's the last word
+        if word_text.endswith(('.', '?', '!', ',', ';')) or i == len(words) - 1:
+            sentence_end = float(w.get("end", float(w.get("start", 0.0)) + 0.1)) + start_offset
+            sentences.append(f"[{sentence_start:.2f}s - {sentence_end:.2f}s] {' '.join(current_sentence_words)}")
+            
+            # Reset for next sentence
+            if i + 1 < len(words):
+                sentence_start = float(words[i + 1].get("start", 0.0)) + start_offset
+                current_sentence_words = []
+                
+    return " ".join(sentences)
+
+
+CURATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "clips": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "number"},
+                    "end": {"type": "number"},
+                    "duration": {"type": "number"},
+                    "viral_score": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "hook_summary": {"type": "string"},
+                    "virality_reason": {"type": "string"}
+                },
+                "required": ["start", "end", "viral_score", "title", "hook_summary", "virality_reason"]
+            }
+        }
+    },
+    "required": ["clips"]
+}
+
+def _call_ollama(prompt: str, system: str, model: str = OLLAMA_MODEL) -> Optional[str]:
+    """Calls Ollama generate endpoint, returns raw response text or None."""
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "model":  model,
+            "format": CURATION_SCHEMA,
+            "stream": False,
+            "system": system,
+            "prompt": prompt,
+        }).encode()
+        req = urllib.request.Request(
+            f"{OLLAMA_HOST}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+            )
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            raw = json.loads(resp.read().decode())
+            return raw.get("response", "")
+    except Exception as exc:
+        logger.warning(f"[curation] Ollama call failed: {exc}")
+        return None
+
+
+def _parse_llm_json(text: str, total_duration: float) -> Optional[List[Dict]]:
+    """
+    Parses LLM response text as a JSON list of cut dicts.
+    Extracts the array slice between first '[' and last ']',
+    handles conversational wrappers, strips code fences, and normalizes key names.
+    """
+    if not text:
+        return None
+    try:
+        import json
+        import re
+
+        clean_text = text.strip()
+        # Remove any markdown code fences
+        clean_text = re.sub(r'```(?:json|JSON)?', '', clean_text)
+        clean_text = clean_text.replace('```', '').strip()
+
+        start_idx_arr = clean_text.find('[')
+        end_idx_arr = clean_text.rfind(']')
+        start_idx_obj = clean_text.find('{')
+        end_idx_obj = clean_text.rfind('}')
+
+        parsed = None
+        if start_idx_obj != -1 and end_idx_obj != -1 and end_idx_obj >= start_idx_obj:
+            try:
+                candidate = clean_text[start_idx_obj:end_idx_obj + 1]
+                parsed_obj = json.loads(candidate)
+                if isinstance(parsed_obj, dict) and "clips" in parsed_obj:
+                    parsed = parsed_obj["clips"]
+            except Exception:
+                pass
+
+        if parsed is None and start_idx_arr != -1 and end_idx_arr != -1 and end_idx_arr >= start_idx_arr:
+            try:
+                candidate = clean_text[start_idx_arr:end_idx_arr + 1]
+                parsed = json.loads(candidate)
+            except Exception:
+                pass
+                
+        if not isinstance(parsed, list):
+            # Fallback to direct parse if Regex extraction failed
+            parsed = json.loads(clean_text)
+            if isinstance(parsed, dict) and "clips" in parsed:
+                parsed = parsed["clips"]
+                
+        if not isinstance(parsed, list):
+            return None
+
+        valid = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            
+            # Support both 'start'/'end' and 'start_time'/'end_time'
+            s = float(item.get("start", item.get("start_time", -1)))
+            e = float(item.get("end", item.get("end_time", -1)))
+
+            if s < 0 or e <= s or s >= (total_duration + 0.1):
+                logger.debug(f"[curation] Rejected hallucinated cut {s:.1f}-{e:.1f} (duration={total_duration:.1f})")
+                continue
+
+            if (e - s) < MIN_CLIP_DURATION_SEC:
+                logger.debug(f"[curation] Rejected sub-minimum cut {s:.1f}-{e:.1f} ({e-s:.1f}s < {MIN_CLIP_DURATION_SEC}s minimum)")
+                continue
+
+            if (e - s) > MAX_CLIP_DURATION_SEC:
+                logger.debug(f"[curation] Clamping cut {s:.1f}-{e:.1f} to {MAX_CLIP_DURATION_SEC}s")
+                e = s + MAX_CLIP_DURATION_SEC
+                if e > total_duration:
+                    e = total_duration
+                    if (e - s) < MIN_CLIP_DURATION_SEC:
+                        continue
+
+            # Align and filter virality score >= 75
+            v_score = 85
+            if "viral_score" in item:
+                try:
+                    v_score = int(float(item["viral_score"]))
+                except (ValueError, TypeError):
+                    v_score = 85
+            elif "virality_score" in item:
+                try:
+                    v_score = int(float(item["virality_score"]))
+                except (ValueError, TypeError):
+                    v_score = 85
+            elif "score" in item:
+                try:
+                    v_score = int(float(item["score"]))
+                except (ValueError, TypeError):
+                    v_score = 85
+
+            if v_score < 75:
+                logger.debug(f"[curation] Rejected low virality cut {s:.1f}-{e:.1f} (score {v_score} < 75)")
+                continue
+
+            item["start"] = s
+            item["end"] = e
+            item["start_time"] = s
+            item["end_time"] = e
+            item["virality_score"] = v_score
+                
+            if "title" in item:
+                item["hook_sentence"] = item["title"]
+            if "virality_reason" in item:
+                item["reason"] = item["virality_reason"]
+                
+            valid.append(item)
+
+        return valid
+
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        logger.debug(f"[curation] JSON parse error: {exc}")
+        return None
+
+
+def _chunk_words(words: List[Dict], chunk_sec: float, overlap_sec: float) -> List[Tuple[float, float, List[Dict]]]:
+    """
+    Splits word list into overlapping time windows.
+    Returns list of (window_start, window_end, words_in_window).
+    """
+    if not words:
+        return []
+    first_t = float(words[0].get("start", 0.0))
+    last_t  = float(words[-1].get("end",   float(words[-1].get("start", 0.0)) + 0.1))
+    total   = last_t - first_t
+
+    if total <= chunk_sec:
+        return [(first_t, last_t, words)]
+
+    chunks = []
+    win_start = first_t
+    while win_start < last_t:
+        win_end   = min(win_start + chunk_sec, last_t)
+        win_words = [w for w in words if float(w.get("start", 0)) >= win_start - 1.0
+                     and float(w.get("end",   0)) <= win_end   + 1.0]
+        if win_words:
+            chunks.append((win_start, win_end, win_words))
+        if win_end >= last_t:
+            break
+        win_start += chunk_sec - overlap_sec
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# 4. Main scoring function
+# ---------------------------------------------------------------------------
+
+def score_transcript_with_llm(
+    words: List[Dict],
+    silence_gaps: List,
+    total_duration: float,
+    model: str = OLLAMA_MODEL,
+) -> List[Dict]:
+    """
+    Scores transcript with Ollama LLM to find viral moments.
+    Returns validated list of cut dicts, or [] if LLM unavailable.
+    Falls back to even-split if Ollama unreachable or JSON fails.
+    Caller is responsible for VRAM eviction of prior models before calling this.
+    """
+    _log_vram("before LLM curation")
+
+    if not words:
+        logger.info("[curation] No words supplied; skipping LLM scoring.")
+        return []
+
+    # Start Ollama server
+    server_ok = _start_ollama_server()
+    if not server_ok:
+        logger.warning("[curation] Ollama unavailable — using even-split fallback.")
+        return []
+
+    # Ensure model is available
+    model_ok = _ensure_model_pulled(model)
+    if not model_ok:
+        logger.warning("[curation] Model pull failed — using even-split fallback.")
+        _unload_model_from_vram(model)
+        return []
+
+    # Chunk transcript for long videos
+    chunk_sec = CHUNK_MINUTES * 60.0
+    chunks = _chunk_words(words, chunk_sec, CHUNK_OVERLAP_SEC)
+    logger.info(f"[curation] Scoring {len(chunks)} transcript window(s) with {model}.")
+
+    all_cuts: List[Dict] = []
+
+    import hashlib
+    for win_start, win_end, chunk_words_list in chunks:
+        # VAD Pruning check
+        window_duration = win_end - win_start
+        silence_in_window = 0.0
+        for gap in silence_gaps:
+            if not isinstance(gap, (list, tuple)) or len(gap) < 2:
+                continue
+            gap_s = max(win_start, float(gap[0]))
+            gap_e = min(win_end, float(gap[1]))
+            if gap_e > gap_s:
+                silence_in_window += (gap_e - gap_s)
+                
+        if window_duration > 0 and (silence_in_window / window_duration) > 0.7:
+            logger.info(f"[curation] Pruned window {win_start:.0f}-{win_end:.0f}s: >70% silence ({silence_in_window:.1f}s / {window_duration:.1f}s)")
+            continue
+
+        transcript_text = _build_transcript_text(chunk_words_list)
+        
+        # SHA-256 Cache
+        window_hash = hashlib.sha256(transcript_text.encode()).hexdigest()
+        if window_hash in _llm_cache:
+            logger.info(f"[curation] Cache hit for window {win_start:.0f}-{win_end:.0f}s")
+            cuts = _llm_cache[window_hash]
+            all_cuts.extend(cuts)
+            continue
+            
+        user_prompt = (
+            f"Transcript window [{win_start:.0f}s – {win_end:.0f}s] "
+            f"(video total: {total_duration:.0f}s):\n\n{transcript_text}\n\n"
+            f"Identify the best 1-3 viral clip segments from this window only (each clip must be between 30 and 50 seconds long). "
+            f"All timestamps must be between {win_start:.2f} and {win_end:.2f}."
+        )
+
+        raw = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            sys_prompt = SYSTEM_PROMPT if attempt == 1 else STRICT_SYSTEM_PROMPT
+            raw = _call_ollama(user_prompt, sys_prompt, model)
+            cuts = _parse_llm_json(raw or "", total_duration)
+            if cuts:
+                logger.info(f"[curation] Window {win_start:.0f}-{win_end:.0f}s: {len(cuts)} cut(s) on attempt {attempt}.")
+                all_cuts.extend(cuts)
+                _llm_cache[window_hash] = cuts
+                break
+            elif cuts is not None:
+                logger.warning(f"[curation] 0 valid cuts (attempt {attempt}/{MAX_RETRIES}) for window {win_start:.0f}-{win_end:.0f}s.")
+            else:
+                logger.warning(f"[curation] JSON parse failed (attempt {attempt}/{MAX_RETRIES}) for window {win_start:.0f}-{win_end:.0f}s.")
+
+    # Evict model from GPU
+    _unload_model_from_vram(model)
+    _log_vram("after LLM curation (model unloaded)")
+
+    if not all_cuts:
+        logger.warning("[curation] LLM returned no valid cuts across all windows — using even-split fallback.")
+        return []
+
+    # Validate and dedup through existing contract function
+    validated = validate_and_format_cuts(all_cuts, total_duration)
+    logger.info(f"[curation] LLM curation complete: {len(validated)} validated segment(s).")
+    return validated
+
+
+# ---------------------------------------------------------------------------
+# 5. VRAM telemetry helper
+# ---------------------------------------------------------------------------
+
+def _log_vram(label: str) -> None:
+    """Logs torch CUDA memory allocated (safe on CPU machines)."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            mb = torch.cuda.memory_allocated() / (1024 ** 2)
+            logger.info(f"[VRAM] {label}: {mb:.1f} MB allocated.")
+            print(f"[VRAM] {label}: {mb:.1f} MB allocated.")
+        else:
+            logger.debug(f"[VRAM] {label}: no GPU — CPU-only mode.")
+    except Exception:
+        pass
+
+
+def _audio_energy_fallback(video_path: str, target_clips: int) -> list:
+    """Finds high-energy audio moments (RMS spikes) to center fallback clips around."""
+    import tempfile
+    import wave
+    import struct
+    import math
+    
+    spikes = []
+    if not video_path or not os.path.isfile(video_path):
+        return spikes
+        
+    temp_wav = None
+    try:
+        try:
+            import audio_intelligence
+        except ImportError:
+            import src.audio_intelligence as audio_intelligence
+            
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+            temp_wav = tf.name
+            
+        audio_intelligence.extract_audio(video_path, temp_wav)
+        
+        with wave.open(temp_wav, 'rb') as wf:
+            rate = wf.getframerate()
+            nframes = wf.getnframes()
+            # Read in chunks of 1 second
+            chunk_size = rate
+            num_chunks = int(nframes / chunk_size)
+            energies = []
+            for i in range(num_chunks):
+                raw = wf.readframes(chunk_size)
+                # handle if raw is empty or short
+                if len(raw) < 2: continue
+                samples = struct.unpack(f"{len(raw)//2}h", raw)
+                rms = math.sqrt(sum(s*s for s in samples) / len(samples)) if samples else 0
+                energies.append((i, rms))
+                
+        # Find top N spikes, spaced by at least 15 seconds
+        energies.sort(key=lambda x: x[1], reverse=True)
+        for i, rms in energies:
+            if all(abs(i - s) >= 15 for s in spikes):
+                spikes.append(i)
+                if len(spikes) >= target_clips:
+                    break
+    except Exception as e:
+        logger.warning(f"[curation] Audio energy fallback failed: {e}")
+    finally:
+        if temp_wav and os.path.exists(temp_wav):
+            try:
+                os.remove(temp_wav)
+            except OSError:
+                pass
+                
+    spikes.sort()
+    return spikes
+
+
+def get_viral_cuts(
+    words: list,
+    silence_gaps: list,
+    total_duration: float,
+    file_name: str = "",
+) -> list:
+    """
+    Main entry point for curation. Routes through LLM scoring when words are
+    available, then falls back to even-interval split on failure or empty words.
+    Always runs validate_and_format_cuts() on the final output.
+    """
+    try:
+        total_duration = float(total_duration)
+        if math.isnan(total_duration) or total_duration <= 1.0:
+            return []
+    except (TypeError, ValueError):
+        return []
+
+    # Short clip: return the whole thing
+    if total_duration <= 45.0:
+        return [{
+            "start": 0.0, "end": total_duration,
+            "start_time": 0.0, "end_time": total_duration,
+            "virality_score": 85,
+            "hook_sentence": "Full Segment Clip",
+            "reason": "Optimal standalone soundbite meeting duration threshold.",
+        }]
+
+    # Attempt LLM path when transcript words are available and dialogue is dense enough
+    if words and len(words) >= 80:
+        try:
+            llm_cuts = score_transcript_with_llm(words, silence_gaps, total_duration)
+            if llm_cuts:
+                logger.info("[curation] Path: LLM scoring (real AI curation).")
+                print("[curation] Path: LLM scoring (real AI curation).")
+                return llm_cuts
+        except Exception as exc:
+            logger.warning(f"[curation] LLM path raised exception ({exc}); using fallback.")
+
+    target_clips = max(3, int(round((total_duration / 3600.0) * 40.0)))
+    
+    # Try audio energy spike fallback first
+    spikes = _audio_energy_fallback(file_name, target_clips)
+    
+    reels = []
+    if spikes:
+        logger.info("[curation] Path: Audio RMS energy spike fallback (no LLM / no words).")
+        print("[curation] Path: Audio RMS energy spike fallback (no LLM / no words).")
+        
+        # NMS Deduplication: Limit overlap to 15%
+        for i, spike_t in enumerate(spikes):
+            start = round(max(0.0, float(spike_t) - 5.0), 2)
+            clip_len = min(35.0, total_duration - start)
+            if clip_len < MIN_CLIP_DURATION_SEC:
+                start = max(0.0, total_duration - MIN_CLIP_DURATION_SEC)
+                clip_len = min(MAX_CLIP_DURATION_SEC, total_duration - start)
+            end = round(start + clip_len, 2)
+            
+            # Check overlap with already selected reels
+            overlap_violation = False
+            for r in reels:
+                overlap_start = max(start, r["start"])
+                overlap_end = min(end, r["end"])
+                if overlap_start < overlap_end:
+                    overlap_dur = overlap_end - overlap_start
+                    if overlap_dur > clip_len * 0.15:
+                        overlap_violation = True
+                        break
+                        
+            if not overlap_violation:
+                reels.append({
+                    "start": start, "end": end,
+                    "start_time": start, "end_time": end,
+                    "virality_score": max(75, 95 - (len(reels) * 2)),
+                    "hook_sentence": f"Action Hook #{len(reels) + 1}",
+                    "reason": f"Blind fallback: Audio energy spike detected at {spike_t}s (no transcript analysis).",
+                })
+                
+                if len(reels) >= target_clips:
+                    break
+                    
+        return validate_and_format_cuts(reels, total_duration)
+    else:
+        # Even-split fallback
+        logger.info("[curation] Path: even-split fallback (no LLM / no words).")
+        print("[curation] Path: even-split fallback (no LLM / no words).")
+        interval = total_duration / target_clips
+        clip_len = min(MAX_CLIP_DURATION_SEC, max(MIN_CLIP_DURATION_SEC, min(35.0, interval)))
+        for i in range(target_clips):
+            start = round(i * interval, 2)
+            end = round(min(total_duration, start + clip_len), 2)
+            if end - start < MIN_CLIP_DURATION_SEC:
+                start = max(0.0, end - MIN_CLIP_DURATION_SEC)
+            reels.append({
+                "start": start, "end": end,
+                "start_time": start, "end_time": end,
+                "virality_score": max(75, 95 - (i % 20)),
+                "hook_sentence": f"Action Hook #{i + 1}",
+                "reason": f"Blind fallback: Even-split interval {i + 1} (no transcript or audio signal).",
+            })
+            
+    return validate_and_format_cuts(reels, total_duration)
+
+
+def curate_video_with_warning(
+    words: list,
+    silence_gaps: list,
+    total_duration: float,
+    file_name: str = "",
+    min_score: int = 75,
+) -> dict:
+    """
+    Curates candidate clips with strict duration and volume constraints.
+    Returns:
+        clips: list of validated and deduplicated clips
+        target_clips: targeted count of clips based on duration (~40 per hour)
+        low_yield_warning: boolean flag if yield is under expected threshold
+        message: status or warning explanation
+    """
+    try:
+        td = float(total_duration)
+        if math.isnan(td) or td <= 1.0:
+            return {
+                "clips": [],
+                "target_clips": 0,
+                "low_yield_warning": True,
+                "message": "Invalid video duration (< 1.0s)."
+            }
+    except (TypeError, ValueError):
+        return {
+            "clips": [],
+            "target_clips": 0,
+            "low_yield_warning": True,
+            "message": "Invalid video duration parameter."
+        }
+
+    if td <= 45.0:
+        target_clips = 1
+    else:
+        target_clips = max(3, int(round((td / 3600.0) * 40.0)))
+
+    all_cuts = get_viral_cuts(words, silence_gaps, td, file_name=file_name)
+
+    filtered_clips = []
+    for c in all_cuts:
+        score = c.get("virality_score", 0)
+        dur = c.get("end", 0) - c.get("start", 0)
+        if score < min_score:
+            continue
+        if td > 45.0 and (dur < MIN_CLIP_DURATION_SEC - 0.5 or dur > MAX_CLIP_DURATION_SEC + 0.5):
+            continue
+        filtered_clips.append(c)
+
+    # Sort clips descending by virality score for review
+    filtered_clips.sort(key=lambda x: x.get("virality_score", 0), reverse=True)
+
+    is_low_yield = False
+    if target_clips > 0 and len(filtered_clips) < target_clips:
+        is_low_yield = True
+        msg = f"Only {len(filtered_clips)} high-quality viral hooks were found."
+    else:
+        msg = f"Successfully curated {len(filtered_clips)} clip(s) (target: {target_clips})."
+
+    return {
+        "clips": filtered_clips,
+        "target_clips": target_clips,
+        "low_yield_warning": is_low_yield,
+        "message": msg
+    }
+

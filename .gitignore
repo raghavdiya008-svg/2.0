@@ -1,0 +1,55 @@
+﻿# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment files & secrets
+.env
+.env.*
+*.env
+
+# Ephemeral & large media directories
+inputs/*
+!inputs/.gitkeep
+outputs/*
+!outputs/.gitkeep
+outputs2/*
+!outputs2/.gitkeep
+temp/*
+!temp/.gitkeep
+
+# Media files & archives
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+*.mp3
+*.zip
+*.tar.gz
+
+# Databases & Cache
+pipeline.db
+pipeline.db-wal
+pipeline.db-shm
+global_audio_cache.json
+*.db
+*.sqlite3
+
+# Large weights
+yolo11n.pt
+*.pt
+*.onnx
+
+# IDE & OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
