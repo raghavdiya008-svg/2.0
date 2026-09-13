@@ -1157,9 +1157,39 @@ def download_file(filename: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 5000))
+    import argparse
+    import atexit
+    import tunnel
+
+    parser = argparse.ArgumentParser(description="2.0 Autonomous Video Studio Web Server")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 5000)), help="Port to run the server on")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host interface to bind")
+    parser.add_argument("--tunnel", action="store_true", default=None, help="Enable public Cloudflare tunnel")
+    parser.add_argument("--no-tunnel", action="store_true", help="Disable public Cloudflare tunnel")
+    args, _ = parser.parse_known_args()
+
+    port = args.port
+    host = args.host
+    
+    # Auto-enable tunnel if in Colab/Kaggle, TUNNEL=1 env var, or explicitly requested
+    should_tunnel = bool(args.tunnel) or (os.environ.get("TUNNEL", "").lower() in ["1", "true", "yes"])
+    if args.tunnel is None and not args.no_tunnel:
+        if tunnel.is_cloud_environment():
+            should_tunnel = True
+
+    public_url = None
+    tunnel_proc = None
+
+    if should_tunnel:
+        print("[server] Launching temporary Cloudflare tunnel for external access...")
+        public_url, tunnel_proc = tunnel.start_cloudflare_tunnel(port=port)
+        if tunnel_proc:
+            atexit.register(lambda: tunnel_proc.terminate() if tunnel_proc else None)
+
     print(f"\n=======================================================")
-    print(f" 🚀 2.0 Autonomous Video Studio is live at:")
-    print(f" 👉 http://127.0.0.1:{port}")
+    print(f" 🚀 2.0 Autonomous Video Studio is live!")
+    print(f" 👉 Local:  http://127.0.0.1:{port}")
+    if public_url:
+        print(f" 🌐 Public: {public_url}")
     print(f"=======================================================\n")
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    uvicorn.run(app, host=host, port=port)

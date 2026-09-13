@@ -81,6 +81,13 @@ def setup_kaggle_environment():
             print(f"Failed to auto-download yolo11n.pt: {e}")
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Kaggle Runner for 2.0 Autonomous Video Pipeline")
+    parser.add_argument("--ui", "--serve", action="store_true", help="Launch the interactive Web UI Studio with Cloudflare tunnel")
+    parser.add_argument("--port", type=int, default=5000, help="Port for the Web Studio")
+    parser.add_argument("--no-tunnel", action="store_true", help="Disable public Cloudflare tunnel")
+    args, _ = parser.parse_known_args()
+
     setup_kaggle_environment()
     
     # Add src to python path
@@ -88,6 +95,35 @@ def main():
     src_dir = os.path.join(project_root, "src")
     sys.path.insert(0, src_dir)
     
+    if args.ui:
+        print("\n" + "=" * 80)
+        print("LAUNCHING WEB STUDIO WITH CLOUDFLARE TUNNEL")
+        print("=" * 80)
+        import server
+        import uvicorn
+        import tunnel
+        import atexit
+
+        port = args.port
+        should_tunnel = not args.no_tunnel
+        public_url = None
+        tunnel_proc = None
+
+        if should_tunnel:
+            print("[server] Launching temporary Cloudflare tunnel for external access...")
+            public_url, tunnel_proc = tunnel.start_cloudflare_tunnel(port=port)
+            if tunnel_proc:
+                atexit.register(lambda: tunnel_proc.terminate() if tunnel_proc else None)
+
+        print(f"\n=======================================================")
+        print(f" 🚀 2.0 Autonomous Video Studio is live!")
+        print(f" 👉 Local:  http://127.0.0.1:{port}")
+        if public_url:
+            print(f" 🌐 Public: {public_url}")
+        print(f"=======================================================\n")
+        uvicorn.run(server.app, host="0.0.0.0", port=port)
+        return
+
     try:
         import pipeline
     except ImportError as e:
@@ -112,7 +148,7 @@ def main():
     
     if not video_files:
         print(f"Warning: No video files found in inputs folder: {inputs_dir}")
-        print("Please place .mp4 or .mov clips into inputs/ to process.")
+        print("Please place .mp4 or .mov clips into inputs/ to process, or run with --ui to launch the web studio.")
         sys.exit(0)
         
     print(f"Discovered {len(video_files)} video file(s) for processing.")
