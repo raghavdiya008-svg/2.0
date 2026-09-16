@@ -15,7 +15,7 @@ import media_downloader
 import curation_engine
 import pipeline
 from server import app
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 
 class TestFullstackPipeline(unittest.TestCase):
