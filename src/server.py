@@ -53,10 +53,20 @@ import media_downloader
 import curation_engine
 import pipeline
 from engine_watermark import detect_blurred_logos, WatermarkRejectionError
+import memory_sync
 
 # Initialize the render queue manager and start background worker
 render_queue_manager = RenderQueueManager.get_instance()
 render_queue_manager.start_worker()
+
+# Start continuous background memory synchronization
+_memory_sync_thread = threading.Thread(
+    target=memory_sync.run_continuous_sync_daemon,
+    kwargs={"interval_seconds": 15.0},
+    daemon=True,
+    name="MemorySyncDaemon"
+)
+_memory_sync_thread.start()
 
 # Thread-safe in-memory stores for batch rendering and real-time progress logs
 _batch_lock = threading.RLock()
@@ -1154,6 +1164,25 @@ def download_file(filename: str):
     if os.path.isfile(fpath):
         return FileResponse(fpath, filename=filename)
     raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/api/memory/sync")
+@app.post("/api/memory/sync")
+def trigger_memory_sync():
+    """Triggers an immediate synchronization of server audits, jobs, licensing, and caches into memory."""
+    try:
+        snapshot = memory_sync.run_sync_once()
+        return {
+            "success": True,
+            "message": "Memory vault synchronized successfully",
+            "timestamp": snapshot.get("last_synced_at"),
+            "system_audit": snapshot.get("system_audit"),
+            "pipeline_db": snapshot.get("pipeline_db"),
+            "licensing": snapshot.get("licensing")
+        }
+    except Exception as e:
+        logger.error(f"Failed to sync memory: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Memory sync failed: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn

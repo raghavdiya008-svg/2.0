@@ -1,0 +1,140 @@
+{
+  "tracker_id": "2.0-server-audit-sync-v1",
+  "last_synced_at": "2026-09-17T13:49:38.880780Z",
+  "last_synced_timestamp": 1789652978.8807805,
+  "system_audit": {
+    "engine_version": "2.0-autonomous",
+    "timestamp": "2026-09-17T13:49:38.880780Z",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python_version": "3.10.11",
+    "phases_compliance": {
+      "phase_0": "PASSED (Core Render Hardening, Zero desync, <0.5s drift tolerance)",
+      "phase_1": "PASSED (WhisperX phonemes, Silero VAD v5, Ollama semantic curation)",
+      "phase_2": "PASSED (YOLOv11 face tracking, TalkNet active speaker, 9:16 dynamic smooth pan)",
+      "phase_3": "PASSED (ASS kinetic karaoke typography, emoji overlay, MarginV safe-zone)",
+      "phase_4": "PASSED (HWID cryptographic RSA licensing, rolling 72h offline lease, FIFO VRAM Guardian)",
+      "phase_5": "PASSED (Dual-speaker stacked layout, speed_factor 1.12x, anti-detection eq, logo overlays)"
+    },
+    "verified_test_suites": {
+      "total_tests": 58,
+      "passing_tests": 58,
+      "failures": 0,
+      "errors": 0,
+      "status": "GREEN"
+    },
+    "server_endpoints": [
+      "GET / (Web Studio Dashboard UI)",
+      "GET /health (Health check & GPU telemetry)",
+      "GET /api/dependencies (ECC dependency status)",
+      "GET /api/dependencies/stream (Real-time SSE install stream)",
+      "POST /api/ingest (YouTube / Google Drive downloader with MD5 cache)",
+      "POST /api/curate (Multi-heuristic 30-50s viral moment extractor)",
+      "POST /api/render_batch (FIFO queued background rendering)",
+      "GET /api/batch/{id} (Batch progress and completed clips)",
+      "GET /api/jobs/{id} (Individual render job status)",
+      "GET /api/export_zip/{id} (Final zip bundle exporter)",
+      "POST /api/upload (Local MP4/MOV and PNG/JPG logo upload)"
+    ]
+  },
+  "git_state": {
+    "branch": "main",
+    "commit_sha": "b06dfd790bedd6a4ead237c9f6853af8822c4c8e",
+    "remote_origin": "https://github.com/raghavdiya008-svg/2.0.git",
+    "working_tree_clean": false,
+    "uncommitted_files": [
+      "M license.lease",
+      " M src/server.py",
+      " M tests/test_fullstack_pipeline.py",
+      "?? .ecc/",
+      "?? docs/",
+      "?? memory/",
+      "?? src/memory_sync.py"
+    ]
+  },
+  "pipeline_db": {
+    "exists": true,
+    "total_jobs": 7,
+    "status_counts": {
+      "queued": 0,
+      "running": 0,
+      "completed": 3,
+      "failed": 4
+    },
+    "recent_jobs": [
+      {
+        "job_id": "b_481700b8_1",
+        "status": "failed",
+        "created_at": "2026-09-17 13:49:33",
+        "updated_at": "2026-09-17 13:49:34",
+        "error_message": "FFmpeg slicing failed for clip 0.0-35.0: b'ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\\r\\n  built with gcc 16.1.0 (Rev2, Built by MSYS2 project)\\r\\n  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper\\r\\n  libavutil      61.  1.100 / 61.  1.100\\r\\n  libavcodec     63.  1.100 / 63.  1.100\\r\\n  libavformat    63.  1.100 / 63.  1.100\\r\\n  libavdevice    63.  1.100 / 63.  1.100\\r\\n  libavfilter    12.  1.100 / 12.  1.100\\r\\n  libswscale     10.  1.100 / 10.  1.100\\r\\n  libswresample   7.  1.100 /  7.  1.100\\r\\n[in#0 @ 000002d051e028c0] Error opening input: No such file or directory\\r\\nError opening input file c:\\\\Users\\\\dksha\\\\Downloads\\\\New folder (4)\\\\2.0\\\\inputs\\\\batch_test_vid.mp4.\\r\\nError opening input files: No such file or directory\\r\\n'",
+        "payload_summary": {}
+      },
+      {
+        "job_id": "b_481700b8_2",
+        "status": "failed",
+        "created_at": "2026-09-17 13:49:33",
+        "updated_at": "2026-09-17 13:49:35",
+        "error_message": "FFmpeg slicing failed for clip 35.0-70.0: b'ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\\r\\n  built with gcc 16.1.0 (Rev2, Built by MSYS2 project)\\r\\n  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper\\r\\n  libavutil      61.  1.100 / 61.  1.100\\r\\n  libavcodec     63.  1.100 / 63.  1.100\\r\\n  libavformat    63.  1.100 / 63.  1.100\\r\\n  libavdevice    63.  1.100 / 63.  1.100\\r\\n  libavfilter    12.  1.100 / 12.  1.100\\r\\n  libswscale     10.  1.100 / 10.  1.100\\r\\n  libswresample   7.  1.100 /  7.  1.100\\r\\n[in#0 @ 000001d973de1ec0] Error opening input: No such file or directory\\r\\nError opening input file c:\\\\Users\\\\dksha\\\\Downloads\\\\New folder (4)\\\\2.0\\\\inputs\\\\batch_test_vid.mp4.\\r\\nError opening input files: No such file or directory\\r\\n'",
+        "payload_summary": {}
+      },
+      {
+        "job_id": "b_a922de82_1",
+        "status": "failed",
+        "created_at": "2026-09-17 13:49:07",
+        "updated_at": "2026-09-17 13:49:07",
+        "error_message": "FFmpeg slicing failed for clip 0.0-35.0: b'ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\\r\\n  built with gcc 16.1.0 (Rev2, Built by MSYS2 project)\\r\\n  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper\\r\\n  libavutil      61.  1.100 / 61.  1.100\\r\\n  libavcodec     63.  1.100 / 63.  1.100\\r\\n  libavformat    63.  1.100 / 63.  1.100\\r\\n  libavdevice    63.  1.100 / 63.  1.100\\r\\n  libavfilter    12.  1.100 / 12.  1.100\\r\\n  libswscale     10.  1.100 / 10.  1.100\\r\\n  libswresample   7.  1.100 /  7.  1.100\\r\\n[in#0 @ 00000258fb6e23c0] Format mov,mp4,m4a,3gp,3g2,mj2 detected only with low score of 1, misdetection possible!\\r\\n[in#0 @ 00000258fb6e23c0] moov atom not found\\r\\n[in#0 @ 00000258fb6e1f00] Error opening input: Invalid data found when processing input\\r\\nError opening input file C:\\\\Users\\\\dksha\\\\Downloads\\\\New folder (4)\\\\2.0\\\\inputs\\\\batch_test_vid.mp4.\\r\\nError opening input files: Invalid data found when processing input\\r\\n'",
+        "payload_summary": {}
+      },
+      {
+        "job_id": "b_a922de82_2",
+        "status": "failed",
+        "created_at": "2026-09-17 13:49:07",
+        "updated_at": "2026-09-17 13:49:08",
+        "error_message": "FFmpeg slicing failed for clip 35.0-70.0: b'ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\\r\\n  built with gcc 16.1.0 (Rev2, Built by MSYS2 project)\\r\\n  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper\\r\\n  libavutil      61.  1.100 / 61.  1.100\\r\\n  libavcodec     63.  1.100 / 63.  1.100\\r\\n  libavformat    63.  1.100 / 63.  1.100\\r\\n  libavdevice    63.  1.100 / 63.  1.100\\r\\n  libavfilter    12.  1.100 / 12.  1.100\\r\\n  libswscale     10.  1.100 / 10.  1.100\\r\\n  libswresample   7.  1.100 /  7.  1.100\\r\\n[in#0 @ 0000021bfd532640] Format mov,mp4,m4a,3gp,3g2,mj2 detected only with low score of 1, misdetection possible!\\r\\n[in#0 @ 0000021bfd532640] moov atom not found\\r\\n[in#0 @ 0000021bfd532180] Error opening input: Invalid data found when processing input\\r\\nError opening input file C:\\\\Users\\\\dksha\\\\Downloads\\\\New folder (4)\\\\2.0\\\\inputs\\\\batch_test_vid.mp4.\\r\\nError opening input files: Invalid data found when processing input\\r\\n'",
+        "payload_summary": {}
+      },
+      {
+        "job_id": "job_1",
+        "status": "completed",
+        "created_at": "2026-09-16 15:08:27",
+        "updated_at": "2026-09-16 15:08:27",
+        "error_message": null,
+        "payload_summary": {}
+      },
+      {
+        "job_id": "job_2",
+        "status": "completed",
+        "created_at": "2026-09-16 15:08:27",
+        "updated_at": "2026-09-16 15:08:27",
+        "error_message": null,
+        "payload_summary": {}
+      },
+      {
+        "job_id": "job_3",
+        "status": "completed",
+        "created_at": "2026-09-16 15:08:27",
+        "updated_at": "2026-09-16 15:08:27",
+        "error_message": null,
+        "payload_summary": {}
+      }
+    ]
+  },
+  "audio_cache": {
+    "exists": true,
+    "cached_entries": 4,
+    "keys": [
+      "99eb32bb2533ed68",
+      "a2a33c57ae0fd429",
+      "test_key_a247f239",
+      "mock_md5_hash_1234567890abcdef"
+    ]
+  },
+  "licensing": {
+    "hwid": "c72f8021c1f481588a17a640ead8582fb48416482cfd03de8f8a66565a41eb1c",
+    "license_valid": true,
+    "license_type": "development",
+    "issued_at": 1789652970.61,
+    "expires_at": 1789912170.61,
+    "max_offline_hours": 72.0
+  }
+}

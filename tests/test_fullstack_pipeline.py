@@ -199,7 +199,10 @@ class TestFullstackPipeline(unittest.TestCase):
             self.assertEqual(res_prog.json()["stage"], "idle")
         finally:
             if os.path.exists(dummy_video):
-                os.remove(dummy_video)
+                try:
+                    os.remove(dummy_video)
+                except OSError:
+                    pass
 
     def test_08_shutil_make_archive_zip_export(self):
         """Verifies create_zip_archive uses shutil.make_archive to produce final_reels.zip."""
@@ -265,6 +268,23 @@ class TestFullstackPipeline(unittest.TestCase):
             if os.path.exists(dummy_vid):
                 os.remove(dummy_vid)
 
+    def test_11_memory_sync_endpoint_and_vault(self):
+        """Verifies GET and POST /api/memory/sync updates unified memory vault."""
+        res = self.client.get("/api/memory/sync")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["success"])
+        self.assertIn("system_audit", data)
+        self.assertIn("pipeline_db", data)
+        self.assertIn("licensing", data)
+
+        import memory_sync
+        snapshot = memory_sync.compile_full_memory_snapshot()
+        self.assertIn("tracker_id", snapshot)
+        self.assertIn("system_audit", snapshot)
+        self.assertIn("phases_compliance", snapshot["system_audit"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
