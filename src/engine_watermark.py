@@ -73,8 +73,10 @@ def _is_suspicious_blur_patch(
     if grid_h <= 0 or grid_w <= 0:
         return False
 
-    block_vars = []
-    block_means = []
+    grid_mask = np.zeros((grid_h, grid_w), dtype=bool)
+    grid_vars = np.zeros((grid_h, grid_w), dtype=float)
+    valid_blocks = 0
+    blur_count = 0
 
     for gy in range(grid_h):
         for gx in range(grid_w):
@@ -87,34 +89,65 @@ def _is_suspicious_blur_patch(
                 continue
 
             b_var = _compute_laplacian_variance(block)
-            block_vars.append(b_var)
-            block_means.append(mean_val)
+            grid_vars[gy, gx] = b_var
+            valid_blocks += 1
+            if b_var <= max_patch_var:
+                grid_mask[gy, gx] = True
+                blur_count += 1
 
-    if not block_vars:
+    if valid_blocks == 0 or blur_count == 0:
         return False
 
-    min_bvar = min(block_vars)
-    max_bvar = max(block_vars)
-    median_bvar = float(np.median(block_vars))
+    blur_fraction = blur_count / valid_blocks
 
-    # Count how many blocks qualify as dead-blur zones
-    blur_blocks = [v for v in block_vars if v <= max_patch_var]
-    total_valid_blocks = len(block_vars)
-
-    if not blur_blocks:
+    # An artificial watermark blur typically occupies 2% to 60% of the corner ROI.
+    if not (0.02 <= blur_fraction <= 0.60):
         return False
 
-    blur_fraction = len(blur_blocks) / total_valid_blocks
+    # Check for letterbox / bar: if blur spans all or almost all columns in multiple rows,
+    # it is a horizontal bar (letterbox/border/banner), not a localized watermark.
+    row_spans = []
+    for gy in range(grid_h):
+        row_blur = grid_mask[gy, :]
+        if np.any(row_blur):
+            span = int(np.max(np.where(row_blur)[0]) - np.min(np.where(row_blur)[0]) + 1)
+            row_spans.append(span)
 
-    # An artificial watermark blur typically occupies 5% to 45% of the corner ROI.
-    # If blur_fraction > 0.75, the entire corner is naturally out-of-focus (bokeh).
-    if 0.03 <= blur_fraction <= 0.60:
-        # Check contrast against the sharpest or median context in the same ROI
-        surrounding_energy = max(median_bvar, max_bvar * 0.5)
-        if surrounding_energy >= min_surrounding_var:
-            ratio = surrounding_energy / max(1e-5, min_bvar)
-            if ratio >= min_contrast_ratio:
-                return True
+    if row_spans and max(row_spans) >= grid_w - 1 and len([s for s in row_spans if s >= grid_w - 1]) >= 2:
+        return False
+
+    # Watermark blur must be an isolated island:
+    blur_ys, blur_xs = np.where(grid_mask)
+    min_by, max_by = int(np.min(blur_ys)), int(np.max(blur_ys))
+    min_bx, max_bx = int(np.min(blur_xs)), int(np.max(blur_xs))
+
+    # Patch cannot span the entire ROI width or height
+    if (max_bx - min_bx + 1) >= grid_w - 1 or (max_by - min_by + 1) >= grid_h - 1:
+        return False
+
+    # Verify sharp content (>= min_surrounding_var) bordering the blur island
+    has_top_sharp = min_by > 0 and np.any(grid_vars[:min_by, min_bx:max_bx+1] >= min_surrounding_var)
+    has_bot_sharp = max_by < grid_h - 1 and np.any(grid_vars[max_by+1:, min_bx:max_bx+1] >= min_surrounding_var)
+    has_left_sharp = min_bx > 0 and np.any(grid_vars[min_by:max_by+1, :min_bx] >= min_surrounding_var)
+    has_right_sharp = max_bx < grid_w - 1 and np.any(grid_vars[min_by:max_by+1, max_bx+1:] >= min_surrounding_var)
+
+    surrounded_sides = sum([has_top_sharp, has_bot_sharp, has_left_sharp, has_right_sharp])
+    if surrounded_sides < 3:
+        return False
+
+    valid_vars = [grid_vars[gy, gx] for gy in range(grid_h) for gx in range(grid_w) if grid_vars[gy, gx] > 0]
+    if not valid_vars:
+        return False
+
+    min_bvar = min([grid_vars[gy, gx] for gy in range(grid_h) for gx in range(grid_w) if grid_mask[gy, gx]])
+    max_bvar = max(valid_vars)
+    median_bvar = float(np.median(valid_vars))
+
+    surrounding_energy = max(median_bvar, max_bvar * 0.5)
+    if surrounding_energy >= min_surrounding_var:
+        ratio = surrounding_energy / max(1e-5, min_bvar)
+        if ratio >= min_contrast_ratio:
+            return True
 
     return False
 

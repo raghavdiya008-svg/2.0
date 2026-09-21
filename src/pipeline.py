@@ -274,11 +274,13 @@ def run_pipeline(
             print(f"[pipeline] Auto-enabled strip_social_ui for vertical aspect ratio ({video_w}x{video_h})")
 
     # ── Blurred Watermark & Logo Pre-Render Rejection (Phase 5) ─────────────
-    if detect_blurred_logos(input_video_path):
-        print("\n" + "!" * 80)
-        print("[REJECTED] Video contains a blurred logo/watermark. Dropping to prevent shadowban.")
-        print("!" * 80 + "\n")
-        raise WatermarkRejectionError("Video contains a blurred logo/watermark. Dropping to prevent shadowban.")
+    check_watermarks = kwargs.get("check_watermarks", kwargs.get("reject_watermarks", True))
+    if check_watermarks and not strip_social_ui:
+        if detect_blurred_logos(input_video_path):
+            print("\n" + "!" * 80)
+            print("[REJECTED] Video contains a blurred logo/watermark. Dropping to prevent shadowban.")
+            print("!" * 80 + "\n")
+            raise WatermarkRejectionError("Video contains a blurred logo/watermark. Dropping to prevent shadowban.")
 
     try:
         # ====================================================================

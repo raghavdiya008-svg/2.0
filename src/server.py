@@ -225,9 +225,10 @@ def _run_render_job(job_data, **kwargs):
     
     base = os.path.splitext(video_filename)[0]
 
-    if detect_blurred_logos(video_path):
-        logger.error(f"[server] [REJECTED] Video {video_filename} contains a blurred watermark. Dropping to prevent shadowban.")
-        raise WatermarkRejectionError(f"Video {video_filename} contains a blurred logo/watermark. Dropping to prevent shadowban.")
+    if job_data.get("check_watermarks", True) and not job_data.get("strip_social_ui", False):
+        if detect_blurred_logos(video_path):
+            logger.error(f"[server] [REJECTED] Video {video_filename} contains a blurred watermark. Dropping to prevent shadowban.")
+            raise WatermarkRejectionError(f"Video {video_filename} contains a blurred logo/watermark. Dropping to prevent shadowban.")
 
     start = job_data.get("start")
     end = job_data.get("end")
@@ -475,12 +476,13 @@ def health():
 # ---------------------------------------------------------------------------
 
 def _startup_dependency_check():
-    """Verifies required packages (whisperx, ultralytics, yt-dlp) on startup and auto-installs missing ones."""
+    """Verifies required packages on startup and auto-installs missing ones if in cloud or explicitly enabled."""
     try:
         _log_progress("startup_deps", "Verifying ECC required dependencies on startup...", stage="dependencies", progress_pct=10)
         status = dependency_manager.check_dependencies()
         missing = status.get("missing_modules", [])
-        if missing:
+        auto_install = os.environ.get("AUTO_INSTALL_DEPS") == "1" or os.path.exists("/kaggle")
+        if missing and auto_install:
             _log_progress("startup_deps", f"Missing packages detected: {', '.join(missing)}. Auto-installing via pip...", stage="dependencies", progress_pct=30)
             for pkg in missing:
                 _log_progress("startup_deps", f"Installing {pkg} via subprocess...", stage="dependencies", progress_pct=50)
@@ -490,8 +492,10 @@ def _startup_dependency_check():
                 else:
                     _log_progress("startup_deps", f"Failed to install {pkg}.", stage="dependencies", progress_pct=80, error=f"Install failed for {pkg}")
             _log_progress("startup_deps", "Startup dependency auto-installation finished.", stage="dependencies", progress_pct=100, is_done=True)
+        elif missing:
+            _log_progress("startup_deps", f"Optional packages missing: {', '.join(missing)}. Using local CPU/mock fallbacks.", stage="dependencies", progress_pct=100, is_done=True)
         else:
-            _log_progress("startup_deps", "All required dependencies (whisperx, ultralytics, yt-dlp) verified.", stage="dependencies", progress_pct=100, is_done=True)
+            _log_progress("startup_deps", "All required dependencies verified.", stage="dependencies", progress_pct=100, is_done=True)
     except Exception as e:
         logger.warning(f"Startup dependency check error: {e}")
 

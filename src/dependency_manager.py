@@ -24,7 +24,7 @@ REQUIRED_MODULES = [
     {"name": "torch", "import_name": "torch", "pip_name": "torch", "critical": True},
     {"name": "fastapi", "import_name": "fastapi", "pip_name": "fastapi", "critical": True},
     {"name": "uvicorn", "import_name": "uvicorn", "pip_name": "uvicorn", "critical": True},
-    {"name": "whisperx", "import_name": "whisperx", "pip_name": "whisperx", "critical": True},
+    {"name": "whisperx", "import_name": "whisperx", "pip_name": "whisperx", "critical": False},
 ]
 
 
