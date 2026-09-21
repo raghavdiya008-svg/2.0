@@ -80,6 +80,18 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
                 filename = f"{base_no_ext}.mp4"
 
         print(f"[media_downloader] YouTube download complete: {filename} ({duration:.1f}s)")
+
+        # Ensure downloaded filename is sanitized to avoid space/special character mismatches
+        base_name = os.path.basename(filename)
+        safe_base = sanitize_filename(os.path.splitext(base_name)[0])
+        safe_filename = os.path.join(os.path.dirname(filename), f"{safe_base}.mp4")
+        if filename != safe_filename and os.path.isfile(filename):
+            try:
+                os.replace(filename, safe_filename)
+                filename = safe_filename
+            except Exception as e:
+                logger.warning(f"Could not rename {filename} to {safe_filename}: {e}")
+
         return {
             "file_path": filename,
             "file_name": os.path.basename(filename),

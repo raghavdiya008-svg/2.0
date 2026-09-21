@@ -35,14 +35,11 @@ DB_PATH = os.path.join(_ROOT_DIR, "pipeline.db")
 GLOBAL_CACHE_PATH = os.path.join(_ROOT_DIR, "global_audio_cache.json")
 LEASE_PATH = os.path.join(_ROOT_DIR, "license.lease")
 
-# Memory Vault Destinations
-ECC_MEMORY_PROJECT_DIR = os.path.join(_ROOT_DIR, ".ecc", "memory", "project")
+# Memory Destinations
 LOCAL_MEMORY_DIR = os.path.join(_ROOT_DIR, "memory")
 DOCS_DIR = os.path.join(_ROOT_DIR, "docs")
-USER_HOME = os.path.expanduser("~")
-CLAUDE_SESSION_DIR = os.path.join(USER_HOME, ".claude", "session-data")
 
-for d in [ECC_MEMORY_PROJECT_DIR, LOCAL_MEMORY_DIR, DOCS_DIR, CLAUDE_SESSION_DIR]:
+for d in [LOCAL_MEMORY_DIR, DOCS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 
@@ -212,7 +209,7 @@ def compile_full_memory_snapshot() -> Dict[str, Any]:
 
 
 def save_memory_snapshot(snapshot: Dict[str, Any]) -> List[str]:
-    """Writes snapshot to all memory vault targets."""
+    """Writes snapshot to canonical project memory and docs targets."""
     saved_paths = []
 
     # 1. Project local memory JSON
@@ -221,34 +218,12 @@ def save_memory_snapshot(snapshot: Dict[str, Any]) -> List[str]:
         json.dump(snapshot, f, indent=2)
     saved_paths.append(json_path)
 
-    # 2. ECC Unified Memory Vault (.ecc/memory/project/)
-    ecc_json = os.path.join(ECC_MEMORY_PROJECT_DIR, "server_audits_tracker.json")
-    with open(ecc_json, "w", encoding="utf-8") as f:
-        json.dump(snapshot, f, indent=2)
-    saved_paths.append(ecc_json)
-
-    # 3. Markdown Memory Document (docs/AUDIT_MEMORY_TRACKER.md)
+    # 2. Markdown Memory Document (docs/AUDIT_MEMORY_TRACKER.md)
     md_content = generate_markdown_report(snapshot)
     md_path = os.path.join(DOCS_DIR, "AUDIT_MEMORY_TRACKER.md")
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
     saved_paths.append(md_path)
-
-    # 4. ECC Memory Markdown (.ecc/memory/project/server_audits_tracker.md)
-    ecc_md = os.path.join(ECC_MEMORY_PROJECT_DIR, "server_audits_tracker.md")
-    with open(ecc_md, "w", encoding="utf-8") as f:
-        f.write(md_content)
-    saved_paths.append(ecc_md)
-
-    # 5. Claude Session Data Store (~/.claude/session-data/YYYY-MM-DD-server-audit-session.tmp)
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
-    claude_session_file = os.path.join(CLAUDE_SESSION_DIR, f"{today_str}-server-audit-session.tmp")
-    try:
-        with open(claude_session_file, "w", encoding="utf-8") as f:
-            f.write(md_content)
-        saved_paths.append(claude_session_file)
-    except Exception as e:
-        logger.warning(f"Could not write to user claude session dir: {e}")
 
     return saved_paths
 

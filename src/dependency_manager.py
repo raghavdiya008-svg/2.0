@@ -54,7 +54,7 @@ def check_dependencies() -> Dict[str, Any]:
                 "version": str(ver),
                 "critical": critical,
             }
-        except ImportError:
+        except (ImportError, OSError):
             results["modules"][pip_name] = {
                 "installed": False,
                 "version": None,
@@ -151,12 +151,12 @@ def is_installed(module_or_import_name: str) -> bool:
             try:
                 importlib.import_module(mod["import_name"])
                 return True
-            except ImportError:
+            except (ImportError, OSError):
                 return False
 
     try:
         importlib.import_module(module_or_import_name)
         return True
-    except ImportError:
+    except (ImportError, OSError):
         return False
 

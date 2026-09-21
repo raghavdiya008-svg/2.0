@@ -19,7 +19,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 import soundfile as sf
-import torch
+try:
+    import torch
+except Exception:
+    torch = None
 import engine_ffmpeg
 
 logger = logging.getLogger(__name__)

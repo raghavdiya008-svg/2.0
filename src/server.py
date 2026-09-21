@@ -107,6 +107,43 @@ def secure_filename(filename: str) -> str:
     filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
     return filename.strip('._') or "file"
 
+def resolve_input_video_path(filename: Optional[str]) -> Optional[str]:
+    """
+    Safely resolves an input video filename or path strictly within INPUTS_DIR.
+    Handles:
+    1. Direct match with spaces/symbols
+    2. secure_filename sanitized name
+    3. Fuzzy match across files in INPUTS_DIR
+    Protects against directory traversal.
+    """
+    if not filename or not str(filename).strip():
+        return None
+    raw = str(filename).strip()
+    raw_name = os.path.basename(raw)
+
+    # 1. Direct path check within INPUTS_DIR
+    direct = os.path.abspath(os.path.join(INPUTS_DIR, raw_name))
+    if os.path.commonpath([direct, os.path.abspath(INPUTS_DIR)]) == os.path.abspath(INPUTS_DIR):
+        if os.path.isfile(direct):
+            return direct
+
+    # 2. Check secure_filename within INPUTS_DIR
+    safe_name = secure_filename(raw_name)
+    safe_path = os.path.abspath(os.path.join(INPUTS_DIR, safe_name))
+    if os.path.commonpath([safe_path, os.path.abspath(INPUTS_DIR)]) == os.path.abspath(INPUTS_DIR):
+        if os.path.isfile(safe_path):
+            return safe_path
+
+    # 3. Fuzzy match: check if any file in INPUTS_DIR matches when sanitized
+    if os.path.isdir(INPUTS_DIR):
+        for f in os.listdir(INPUTS_DIR):
+            if secure_filename(f) == safe_name or f.lower() == raw_name.lower():
+                candidate = os.path.abspath(os.path.join(INPUTS_DIR, f))
+                if os.path.isfile(candidate):
+                    return candidate
+
+    return None
+
 def _resolve_logo_path(logo_input: Optional[str]) -> Optional[str]:
     """
     Safely resolves a logo filename or relative path strictly within LOGO_DIR.
@@ -478,7 +515,7 @@ def health():
 def _startup_dependency_check():
     """Verifies required packages on startup and auto-installs missing ones if in cloud or explicitly enabled."""
     try:
-        _log_progress("startup_deps", "Verifying ECC required dependencies on startup...", stage="dependencies", progress_pct=10)
+        _log_progress("startup_deps", "Verifying required dependencies on startup...", stage="dependencies", progress_pct=10)
         status = dependency_manager.check_dependencies()
         missing = status.get("missing_modules", [])
         auto_install = os.environ.get("AUTO_INSTALL_DEPS") == "1" or os.path.exists("/kaggle")
@@ -634,11 +671,10 @@ def api_curate(req: CurateRequest):
     and virality score >= 75. Utilizes MD5 cache if available.
     """
     pid = req.process_id or str(uuid.uuid4())
-    safe_name = secure_filename(req.file_name)
-    video_path = os.path.join(INPUTS_DIR, safe_name)
-
-    if not os.path.isfile(video_path):
-        raise HTTPException(status_code=404, detail=f"Video file '{safe_name}' not found.")
+    video_path = resolve_input_video_path(req.file_name)
+    if not video_path:
+        raise HTTPException(status_code=404, detail=f"Video file '{req.file_name}' not found.")
+    safe_name = os.path.basename(video_path)
 
     _log_progress(pid, "Starting intelligence curation pipeline...", stage="curation", progress_pct=10)
 
@@ -744,10 +780,10 @@ def api_render_batch(req: BatchRenderRequest):
     Accepts selected clips from the Review Gallery, queues each clip to the
     RenderQueueManager, and tracks batch state.
     """
-    safe_name = secure_filename(req.file_name)
-    video_path = os.path.join(INPUTS_DIR, safe_name)
-    if not os.path.isfile(video_path):
-        raise HTTPException(status_code=404, detail=f"Video file '{safe_name}' not found.")
+    video_path = resolve_input_video_path(req.file_name)
+    if not video_path:
+        raise HTTPException(status_code=404, detail=f"Video file '{req.file_name}' not found.")
+    safe_name = os.path.basename(video_path)
 
     if not req.clips:
         raise HTTPException(status_code=400, detail="No clips selected for rendering.")
@@ -1000,12 +1036,10 @@ def serve_logo_asset(filename: str):
 @app.get("/get_frame")
 def get_frame(video: str = Query(...)):
     """Extracts raw frame at 2.0s from the selected video and returns JPEG."""
-    video_name = secure_filename(video)
-    video_path = os.path.abspath(os.path.join(INPUTS_DIR, video_name))
-    if not os.path.commonpath([video_path, os.path.abspath(INPUTS_DIR)]) == os.path.abspath(INPUTS_DIR):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    if not os.path.isfile(video_path):
+    video_path = resolve_input_video_path(video)
+    if not video_path:
         raise HTTPException(status_code=404, detail="Video file not found")
+    video_name = os.path.basename(video_path)
 
     try:
         mtime = os.stat(video_path).st_mtime
@@ -1058,10 +1092,10 @@ def get_frame(video: str = Query(...)):
 @app.post("/render")
 def render(req: RenderRequest):
     """Legacy single-clip render endpoint."""
-    video_name = secure_filename(req.video)
-    video_path = os.path.abspath(os.path.join(INPUTS_DIR, video_name))
-    if not os.path.isfile(video_path):
+    video_path = resolve_input_video_path(req.video)
+    if not video_path:
         raise HTTPException(status_code=404, detail="Video file not found")
+    video_name = os.path.basename(video_path)
         
     logo_name = secure_filename(req.logo) if req.logo else None
     video_coords = req.video_coords.model_dump() if req.video_coords else {
