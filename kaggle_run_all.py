@@ -33,16 +33,16 @@ def setup_kaggle_environment():
     ]
     
     if is_kaggle:
-        print("\nUpdating system packages (ffmpeg, libass)...")
+        print("\nUpdating system packages (ffmpeg, libass, zstd)...")
         try:
             subprocess.run(["apt-get", "update", "-y", "-qq"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libass-dev"], check=True)
+            subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libass-dev", "zstd"], check=True)
         except Exception as e:
             print(f"Failed to update system packages: {e}")
             
         print("\nInstalling Ollama (if missing)...")
         try:
-            subprocess.run(["curl -fsSL https://ollama.ai/install.sh | sh"], shell=True, check=True)
+            subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True, check=True)
         except Exception as e:
             print(f"Failed to install Ollama: {e}")
 
