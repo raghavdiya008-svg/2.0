@@ -44,6 +44,67 @@ FONT_SIZE    = 84               # ~4.4% of canvas height for 1080x1920
 MARGIN_V     = 580              # 580px from bottom (TikTok / Reels / Shorts safe zone)
 MARGIN_LR    = 40               # Left/right margin
 
+def hex_to_ass_color(hex_str: str, alpha: str = "00") -> str:
+    """Converts a hex color (#RRGGBB or RRGGBB) to ASS color format (&HAABBGGRR)."""
+    clean_hex = hex_str.lstrip("#")
+    if len(clean_hex) == 6:
+        r, g, b = clean_hex[0:2], clean_hex[2:4], clean_hex[4:6]
+        return f"&H{alpha}{b}{g}{r}"
+    return COLOR_ACTIVE
+
+def hex_to_ass_tag(hex_str: str) -> str:
+    """Converts a hex color (#RRGGBB or RRGGBB) to ASS inline tag format (&HBBGGRR&)."""
+    clean_hex = hex_str.lstrip("#")
+    if len(clean_hex) == 6:
+        r, g, b = clean_hex[0:2], clean_hex[2:4], clean_hex[4:6]
+        return f"&H{b}{g}{r}&"
+    return TAG_COLOR_ACTIVE
+
+# Curated high-engagement caption style presets inspired by OpenShorts and Opus
+CAPTION_PRESETS = {
+    "yellow_pop": {
+        "font_name": "Arial Black",
+        "font_size": 84,
+        "primary_color": "&H0000FFFF",   # Yellow highlight
+        "secondary_color": "&H00FFFFFF", # White text
+        "outline_color": "&H00000000",   # Solid black outline
+        "back_color": "&H80000000",      # Deep shadow
+        "margin_v": 580,
+        "uppercase": False,
+    },
+    "anton_viral": {
+        "font_name": "Anton",
+        "font_size": 86,
+        "primary_color": "&H0000E5FF",   # Bright electric yellow
+        "secondary_color": "&H00FFFFFF", # Pure white
+        "outline_color": "&H00000000",
+        "back_color": "&H90000000",
+        "margin_v": 580,
+        "uppercase": True,
+    },
+    "emerald_glow": {
+        "font_name": "Arial Black",
+        "font_size": 84,
+        "primary_color": "&H0032FF00",   # Neon emerald green
+        "secondary_color": "&H00FFFFFF",
+        "outline_color": "&H00000000",
+        "back_color": "&H80000000",
+        "margin_v": 580,
+        "uppercase": False,
+    },
+    "cyan_punch": {
+        "font_name": "Arial Black",
+        "font_size": 84,
+        "primary_color": "&H00FFFF00",   # Cyan highlight
+        "secondary_color": "&H00FFFFFF",
+        "outline_color": "&H00000000",
+        "back_color": "&H80000000",
+        "margin_v": 580,
+        "uppercase": False,
+    }
+}
+
+
 # ---------------------------------------------------------------------------
 # Comprehensive keyword → emoji-name mapping (100+ categories)
 # ---------------------------------------------------------------------------
@@ -126,6 +187,7 @@ def generate_karaoke_ass(
     max_words_per_line: int = 3,
     max_chars_per_line: int = 24,
     gap_threshold_sec: float = 0.45,
+    **kwargs,
 ) -> Optional[str]:
     """
     Generates an Advanced Substation Alpha (.ass) subtitle file with:
@@ -178,8 +240,14 @@ def generate_karaoke_ass(
     current_line: List[Dict[str, Any]] = []
     current_len = 0
 
+    # Check for style preset or uppercase option
+    preset_config = CAPTION_PRESETS.get(font_name.lower()) if isinstance(font_name, str) else None
+    uppercase = kwargs.get("uppercase", preset_config.get("uppercase", False) if preset_config else False)
+
     for w in valid_words:
         word_text = str(w.get("word", "")).strip()
+        if uppercase:
+            word_text = word_text.upper()
 
         try:
             w_start = float(w.get("start") if w.get("start") is not None else 0.0)
@@ -196,7 +264,7 @@ def generate_karaoke_ass(
             current_line = []
             current_len = 0
 
-        current_line.append(w)
+        current_line.append({**w, "word": word_text})
         current_len += len(word_text) + 1
 
         # Break early on terminal punctuation if we have at least 2 words

@@ -603,3 +603,30 @@ def run_speaker_diarization(
         except Exception:
             pass
 
+
+def run_funasr_campp_diarization(wav_path: str) -> List[Dict[str, Any]]:
+    """
+    Runs local speaker diarization using FunASR CAM++ model (from FunClip).
+    Provides a zero-token offline alternative to pyannote.
+    """
+    if not os.path.isfile(wav_path):
+        return []
+    try:
+        from funasr import AutoModel
+        # Use CAM++ speaker verification / diarization pipeline
+        model = AutoModel(model="damo/speech_campplus_sv_zh-cn_16k-common", disable_update=True)
+        res = model.generate(input=wav_path)
+        segments = []
+        if isinstance(res, list):
+            for item in res:
+                if isinstance(item, dict) and "spk" in item:
+                    segments.append({
+                        "speaker": f"SPEAKER_{item.get('spk', 0)}",
+                        "start": round(float(item.get("start", 0.0)) / 1000.0, 4),
+                        "end": round(float(item.get("end", 0.0)) / 1000.0, 4),
+                    })
+        return sorted(segments, key=lambda x: x["start"])
+    except Exception as exc:
+        logger.debug(f"[funasr_campp] CAM++ diarization unavailable or failed: {exc}")
+        return []
+

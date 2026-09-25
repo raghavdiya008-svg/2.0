@@ -362,11 +362,19 @@ def run_pipeline(
                 except Exception as exc:
                     print(f"[pipeline] Diarization failed ({exc}); continuing without speaker data.")
             else:
-                print(
-                    "[pipeline] HF_TOKEN not set — diarization skipped.\n"
-                    "  To enable: set HF_TOKEN in Kaggle Secrets and accept the pyannote licence.\n"
-                    "  https://hf.co/pyannote/speaker-diarization-3.1"
-                )
+                # Try zero-token offline local CAM++ model (FunClip)
+                try:
+                    speaker_segments = audio_intelligence.run_funasr_campp_diarization(full_wav_path)
+                    if speaker_segments:
+                        print(f"[pipeline] FunASR CAM++ Diarization complete: {len(speaker_segments)} speaker turn(s).")
+                except Exception as exc:
+                    logger.debug(f"[pipeline] Offline CAM++ diarization skipped: {exc}")
+                if not speaker_segments:
+                    print(
+                        "[pipeline] HF_TOKEN not set and CAM++ inactive — diarization skipped.\n"
+                        "  To enable pyannote: set HF_TOKEN in Kaggle Secrets and accept the pyannote licence.\n"
+                        "  https://hf.co/pyannote/speaker-diarization-3.1"
+                    )
 
         # Save to scoped global audio cache under MD5 and cache_key
         cache_data = {
