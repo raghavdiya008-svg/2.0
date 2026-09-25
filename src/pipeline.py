@@ -28,6 +28,12 @@ if _SRC_DIR not in sys.path:
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 def project_timestamp(orig_t: float, intervals: list) -> float:
     """Projects original timestamp to pruned video timeline."""
     if not intervals:
