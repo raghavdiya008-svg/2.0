@@ -75,7 +75,7 @@ _batches: Dict[str, Dict[str, Any]] = {}
 _progress_lock = threading.RLock()
 _progress_logs: Dict[str, Dict[str, Any]] = {}
 
-def _log_progress(process_id: str, message: str, stage: str = "general", progress_pct: int = 0, is_done: bool = False, error: Optional[str] = None):
+def _log_progress(process_id: str, message: str, stage: str = "general", progress_pct: int = 0, is_done: bool = False, error: Optional[str] = None, result: Optional[Any] = None):
     """Appends a timestamped log entry to the in-memory progress tracker for process_id."""
     if not process_id:
         return
@@ -88,7 +88,7 @@ def _log_progress(process_id: str, message: str, stage: str = "general", progres
                 "logs": [],
                 "is_done": is_done,
                 "error": error,
-                "result": None,
+                "result": result,
                 "updated_at": time.time(),
             }
         p = _progress_logs[process_id]
@@ -97,6 +97,8 @@ def _log_progress(process_id: str, message: str, stage: str = "general", progres
         p["is_done"] = is_done or p.get("is_done", False)
         if error:
             p["error"] = error
+        if result is not None:
+            p["result"] = result
         timestamp = time.strftime("%H:%M:%S")
         p["logs"].append(f"[{timestamp}] {message}")
         p["updated_at"] = time.time()
@@ -210,12 +212,14 @@ class IngestRequest(BaseModel):
     url: Optional[str] = None
     file_name: Optional[str] = None
     process_id: Optional[str] = None
+    async_mode: bool = False
 
 class CurateRequest(BaseModel):
     file_name: str
     audio_md5: Optional[str] = None
     process_id: Optional[str] = None
     min_score: int = 75
+    async_mode: bool = False
 
 class BatchRenderRequest(BaseModel):
     file_name: str
@@ -579,13 +583,7 @@ def api_dependencies_stream(packages: Optional[str] = Query(None)):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.post("/api/ingest")
-def api_ingest(req: IngestRequest):
-    """
-    Ingests video from YouTube/GDrive URL or local file, extracts audio,
-    computes MD5 stream hash, and inspects cache status.
-    """
-    pid = req.process_id or str(uuid.uuid4())
+def _do_ingest(req: IngestRequest, pid: str) -> Dict[str, Any]:
     _log_progress(pid, "Starting video ingestion...", stage="ingestion", progress_pct=10)
 
     target_path = None
@@ -604,12 +602,12 @@ def api_ingest(req: IngestRequest):
             _log_progress(pid, f"Download failed: {e}", stage="ingestion", progress_pct=40, error=str(e))
             raise HTTPException(status_code=400, detail=f"Download failed: {e}")
     elif req.file_name:
-        safe_name = secure_filename(req.file_name)
-        target_path = os.path.join(INPUTS_DIR, safe_name)
-        if not os.path.isfile(target_path):
-            _log_progress(pid, f"File not found: {safe_name}", stage="ingestion", error="File not found")
+        resolved = resolve_input_video_path(req.file_name)
+        if not resolved or not os.path.isfile(resolved):
+            _log_progress(pid, f"File not found: {req.file_name}", stage="ingestion", error="File not found")
             raise HTTPException(status_code=404, detail="Selected input video file not found.")
-        _log_progress(pid, f"Ingested local file: {safe_name}", stage="ingestion", progress_pct=40)
+        target_path = resolved
+        _log_progress(pid, f"Ingested local file: {os.path.basename(target_path)}", stage="ingestion", progress_pct=40)
     else:
         raise HTTPException(status_code=400, detail="Must provide either 'url' or 'file_name'.")
 
@@ -649,9 +647,7 @@ def api_ingest(req: IngestRequest):
             except OSError:
                 pass
 
-    _log_progress(pid, "Ingestion process completed.", stage="ingestion", progress_pct=100, is_done=True)
-
-    return {
+    result = {
         "status": "ok",
         "file_name": os.path.basename(target_path),
         "file_path": target_path,
@@ -659,18 +655,48 @@ def api_ingest(req: IngestRequest):
         "cache_hit": cache_hit,
         "duration": round(total_dur, 2)
     }
+    _log_progress(pid, "Ingestion process completed.", stage="ingestion", progress_pct=100, is_done=True, result=result)
+    return result
+
+@app.post("/api/ingest")
+def api_ingest(req: IngestRequest):
+    """
+    Ingests video from YouTube/GDrive URL or local file, extracts audio,
+    computes MD5 stream hash, and inspects cache status.
+    Supports async_mode=True to prevent HTTP timeout on long downloads.
+    """
+    pid = req.process_id or str(uuid.uuid4())
+    req.process_id = pid
+
+    if not req.url and not req.file_name:
+        raise HTTPException(status_code=400, detail="Must provide either 'url' or 'file_name'.")
+
+    if req.url:
+        stripped_url = req.url.strip()
+        if not (stripped_url.startswith("http://") or stripped_url.startswith("https://")):
+            raise HTTPException(status_code=400, detail="Invalid URL format. Must start with http:// or https://")
+        if not (media_downloader.is_youtube_url(stripped_url) or media_downloader.is_gdrive_url(stripped_url)):
+            raise HTTPException(status_code=400, detail="Unsupported remote URL. Only YouTube and Google Drive URLs are supported.")
+
+    if req.async_mode:
+        def _bg_ingest():
+            try:
+                _do_ingest(req, pid)
+            except Exception as e:
+                logger.error(f"[server] Background ingest error: {e}", exc_info=True)
+                _log_progress(pid, f"Ingestion error: {e}", stage="ingestion", progress_pct=100, is_done=True, error=str(e))
+
+        _log_progress(pid, "Starting video ingestion in background...", stage="ingestion", progress_pct=5)
+        threading.Thread(target=_bg_ingest, daemon=True, name=f"Ingest-{pid}").start()
+        return {"status": "queued", "process_id": pid}
+    else:
+        return _do_ingest(req, pid)
 
 # ---------------------------------------------------------------------------
 # Phase 2: High-Volume Curation Endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/api/curate")
-def api_curate(req: CurateRequest):
-    """
-    Curates candidate viral clips enforcing 30s-50s duration, ~40 clips/hr volume,
-    and virality score >= 75. Utilizes MD5 cache if available.
-    """
-    pid = req.process_id or str(uuid.uuid4())
+def _do_curate(req: CurateRequest, pid: str) -> Dict[str, Any]:
     video_path = resolve_input_video_path(req.file_name)
     if not video_path:
         raise HTTPException(status_code=404, detail=f"Video file '{req.file_name}' not found.")
@@ -756,9 +782,7 @@ def api_curate(req: CurateRequest):
         min_score=req.min_score
     )
 
-    _log_progress(pid, f"Curation complete: {len(curated['clips'])} clip(s) curated.", stage="curation", progress_pct=100, is_done=True)
-
-    return {
+    result = {
         "status": "ok",
         "file_name": safe_name,
         "audio_md5": audio_md5,
@@ -769,6 +793,36 @@ def api_curate(req: CurateRequest):
         "low_yield_warning": curated["low_yield_warning"],
         "message": curated["message"]
     }
+    _log_progress(pid, f"Curation complete: {len(curated['clips'])} clip(s) curated.", stage="curation", progress_pct=100, is_done=True, result=result)
+    return result
+
+@app.post("/api/curate")
+def api_curate(req: CurateRequest):
+    """
+    Curates candidate viral clips enforcing 30s-50s duration, ~40 clips/hr volume,
+    and virality score >= 75. Utilizes MD5 cache if available.
+    Supports async_mode=True to prevent HTTP timeout on long videos.
+    """
+    pid = req.process_id or str(uuid.uuid4())
+    req.process_id = pid
+
+    video_path = resolve_input_video_path(req.file_name)
+    if not video_path:
+        raise HTTPException(status_code=404, detail=f"Video file '{req.file_name}' not found.")
+
+    if req.async_mode:
+        def _bg_curate():
+            try:
+                _do_curate(req, pid)
+            except Exception as e:
+                logger.error(f"[server] Background curate error: {e}", exc_info=True)
+                _log_progress(pid, f"Curation error: {e}", stage="curation", progress_pct=100, is_done=True, error=str(e))
+
+        _log_progress(pid, "Starting curation pipeline in background...", stage="curation", progress_pct=5)
+        threading.Thread(target=_bg_curate, daemon=True, name=f"Curate-{pid}").start()
+        return {"status": "queued", "process_id": pid}
+    else:
+        return _do_curate(req, pid)
 
 # ---------------------------------------------------------------------------
 # Phase 3 & 4: Batch Render and ZIP Export Endpoints
@@ -946,7 +1000,8 @@ def api_get_progress(process_id: str):
                 "progress_pct": 0,
                 "logs": [],
                 "is_done": False,
-                "error": None
+                "error": None,
+                "result": None
             }
         return data
 

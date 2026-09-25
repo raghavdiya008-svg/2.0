@@ -287,7 +287,76 @@ class TestFullstackPipeline(unittest.TestCase):
         self.assertIn("system_audit", snapshot)
         self.assertIn("phases_compliance", snapshot["system_audit"])
 
+    def test_12_async_ingest_and_curate_polling(self):
+        """Verifies async_mode=True returns immediately and reports result via /api/progress."""
+        import server
+        import time
+        dummy_vid = os.path.join(server.INPUTS_DIR, "async_test_vid.mp4")
+        with open(dummy_vid, "w") as f:
+            f.write("mock video data for async test")
+
+        try:
+            with patch("subprocess.run") as mock_subproc, \
+                 patch("audio_intelligence.extract_audio") as mock_extract:
+                mock_subproc.return_value = MagicMock(
+                    returncode=0,
+                    stdout=json.dumps({"format": {"duration": "40.0"}})
+                )
+
+                # 1. Async Ingest
+                pid_ingest = "test_pid_ingest_1"
+                res_ingest = self.client.post("/api/ingest", json={
+                    "file_name": "async_test_vid.mp4",
+                    "process_id": pid_ingest,
+                    "async_mode": True
+                })
+                self.assertEqual(res_ingest.status_code, 200)
+                self.assertEqual(res_ingest.json()["status"], "queued")
+                self.assertEqual(res_ingest.json()["process_id"], pid_ingest)
+
+                # Wait for background thread with polling
+                data_prog = None
+                for _ in range(30):
+                    time.sleep(0.1)
+                    res_prog = self.client.get(f"/api/progress/{pid_ingest}")
+                    data_prog = res_prog.json()
+                    if data_prog.get("is_done"):
+                        break
+
+                self.assertTrue(data_prog["is_done"])
+                self.assertIsNotNone(data_prog["result"])
+                self.assertEqual(data_prog["result"]["file_name"], "async_test_vid.mp4")
+
+                # 2. Async Curate
+                pid_curate = "test_pid_curate_1"
+                res_curate = self.client.post("/api/curate", json={
+                    "file_name": "async_test_vid.mp4",
+                    "process_id": pid_curate,
+                    "min_score": 75,
+                    "async_mode": True
+                })
+                self.assertEqual(res_curate.status_code, 200)
+                self.assertEqual(res_curate.json()["status"], "queued")
+                self.assertEqual(res_curate.json()["process_id"], pid_curate)
+
+                # Wait for background thread with polling
+                data_curate = None
+                for _ in range(50):
+                    time.sleep(0.1)
+                    res_curate_prog = self.client.get(f"/api/progress/{pid_curate}")
+                    data_curate = res_curate_prog.json()
+                    if data_curate.get("is_done"):
+                        break
+
+                self.assertTrue(data_curate["is_done"])
+                self.assertIsNotNone(data_curate["result"])
+                self.assertIn("clips", data_curate["result"])
+        finally:
+            if os.path.exists(dummy_vid):
+                os.remove(dummy_vid)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
