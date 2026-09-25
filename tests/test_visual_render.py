@@ -192,12 +192,13 @@ def test_visual_render():
     assert bottom_mean < 252.0, f"FAILED: Bottom margin is solid white! Mean intensity={bottom_mean:.2f}"
     print("  [PASS] Verified: No white letterbox bars exist on top or bottom.")
 
-    # Cleanup temporary trimmed slice
-    if os.path.exists(trimmed_slice):
-        try:
-            os.remove(trimmed_slice)
-        except OSError:
-            pass
+    # Cleanup temporary test files so temp stays clean
+    for fpath in [trimmed_slice, output_reel, input_slice]:
+        if fpath and os.path.exists(fpath):
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
 
     print("\n>>> ALL VISUAL RENDER VERIFICATION TESTS PASSED (Exit Code 0) <<<")
 

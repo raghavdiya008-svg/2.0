@@ -15,11 +15,18 @@ import gc
 import hashlib
 import json
 import os
+import sys
 import shutil
 import subprocess
 import uuid
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SRC_DIR, ".."))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 def project_timestamp(orig_t: float, intervals: list) -> float:
     """Projects original timestamp to pruned video timeline."""
@@ -65,9 +72,7 @@ except ImportError:
         def cleanup_vram():
             return {}
 
-_SRC_DIR      = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_SRC_DIR, ".."))
-_EMOJIS_DIR   = os.path.join(_PROJECT_ROOT, "assets", "emojis")
+_EMOJIS_DIR = os.path.join(_PROJECT_ROOT, "assets", "emojis")
 
 GLOBAL_AUDIO_CACHE_PATH = (
     "/kaggle/working/global_audio_cache.json"
