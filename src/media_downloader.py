@@ -40,9 +40,9 @@ def is_gdrive_url(url: str) -> bool:
 
 
 def sanitize_filename(name: str) -> str:
-    """Removes problematic filesystem characters."""
-    clean = re.sub(r'[\\/*?:"<>|]', "", name)
-    clean = clean.replace(" ", "_").strip("._")
+    """Removes problematic filesystem characters and normalizes for clean cross-platform safety."""
+    clean = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)
+    clean = re.sub(r'_+', '_', clean).strip('._')
     return clean[:80] or "video"
 
 
@@ -50,6 +50,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     """
     Downloads a YouTube video via yt_dlp.
     Returns dictionary with file_path, file_name, title, duration.
+    Reuses existing file if already downloaded in output_dir.
     """
     import yt_dlp
 
@@ -65,12 +66,48 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         "no_warnings": False,
     }
 
-    print(f"[media_downloader] Downloading YouTube video from {url}...")
+    print(f"[media_downloader] Inspecting YouTube metadata from {url}...")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            title = info.get("title", "youtube_video")
+            duration = float(info.get("duration", 0.0))
+            safe_base = sanitize_filename(title)
+            safe_filename = os.path.join(output_dir, f"{safe_base}.mp4")
+
+            # Check if an existing file matches exactly or fuzzy in output_dir
+            if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 1024 * 1024:
+                print(f"[media_downloader] File already exists in inputs/: {safe_filename} ({duration:.1f}s) — skipping re-download.")
+                return {
+                    "file_path": safe_filename,
+                    "file_name": os.path.basename(safe_filename),
+                    "title": title,
+                    "duration": duration,
+                    "source": "youtube",
+                    "url": url,
+                }
+            # Also check if any file in output_dir matches the sanitized base
+            if os.path.isdir(output_dir):
+                for f in os.listdir(output_dir):
+                    if f.lower().endswith(".mp4") and (sanitize_filename(f[:-4]) == safe_base or f.startswith(safe_base[:30])):
+                        candidate = os.path.join(output_dir, f)
+                        if os.path.isfile(candidate) and os.path.getsize(candidate) > 1024 * 1024:
+                            print(f"[media_downloader] Found existing downloaded file: {candidate} — skipping re-download.")
+                            return {
+                                "file_path": candidate,
+                                "file_name": f,
+                                "title": title,
+                                "duration": duration,
+                                "source": "youtube",
+                                "url": url,
+                            }
+        except Exception as e:
+            logger.debug(f"[media_downloader] Metadata pre-check non-fatal: {e}")
+
+        print(f"[media_downloader] Downloading YouTube video from {url}...")
         info = ydl.extract_info(url, download=True)
         title = info.get("title", "youtube_video")
         duration = float(info.get("duration", 0.0))
-        ext = info.get("ext", "mp4")
 
         filename = ydl.prepare_filename(info)
         # In case merge format renamed to .mp4

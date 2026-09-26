@@ -228,6 +228,7 @@ class BatchRenderRequest(BaseModel):
     brand_logo: Optional[str] = None
     speed: float = 1.12
     aspect_ratio: str = "9:16"
+    audio_md5: Optional[str] = None
 
 # ---------------------------------------------------------------------------
 # Background Worker Functions
@@ -255,12 +256,16 @@ def _run_render_job(job_data, **kwargs):
     text_coords = job_data.get("text_coords") or {"x": 60, "y": 80, "font_size": 48, "text_content": ""}
     emojis = job_data.get("emojis", [])
 
-    if os.path.isabs(video_name) and os.path.isfile(video_name):
+    resolved_path = resolve_input_video_path(video_name)
+    if resolved_path and os.path.isfile(resolved_path):
+        video_path = resolved_path
+        video_filename = os.path.basename(resolved_path)
+    elif os.path.isabs(video_name) and os.path.isfile(video_name):
         video_path = video_name
         video_filename = os.path.basename(video_name)
     else:
         video_path = os.path.join(INPUTS_DIR, video_name)
-        video_filename = video_name
+        video_filename = os.path.basename(video_name)
 
     logo_path = _resolve_logo_path(logo_name)
     
@@ -314,7 +319,7 @@ def _run_render_job(job_data, **kwargs):
                 for w in job_data["words"]:
                     ws = float(w.get("start", 0))
                     we = float(w.get("end", 0))
-                    if ws >= start_f and we <= end_f:
+                    if we > start_f and ws < end_f:
                         clip_words.append({
                             **w,
                             "start": max(0.0, ws - start_f),
@@ -846,18 +851,24 @@ def api_render_batch(req: BatchRenderRequest):
     job_ids = []
 
     cached_words = []
-    try:
-        temp_wav = os.path.join(TEMP_DIR, f"probe_{uuid.uuid4().hex[:8]}.wav")
-        import audio_intelligence
-        audio_intelligence.extract_audio(video_path, temp_wav)
-        md5 = pipeline.compute_audio_stream_md5(temp_wav)
-        if os.path.isfile(temp_wav):
-            os.remove(temp_wav)
-        cached = pipeline._load_audio_cache(md5)
+    if req.audio_md5:
+        cached = pipeline._load_audio_cache(req.audio_md5)
         if cached and "words" in cached:
             cached_words = cached["words"]
-    except Exception as e:
-        logger.warning(f"[server] Could not probe audio cache for batch: {e}")
+
+    if not cached_words:
+        try:
+            temp_wav = os.path.join(TEMP_DIR, f"probe_{uuid.uuid4().hex[:8]}.wav")
+            import audio_intelligence
+            audio_intelligence.extract_audio(video_path, temp_wav)
+            md5 = pipeline.compute_audio_stream_md5(temp_wav)
+            if os.path.isfile(temp_wav):
+                os.remove(temp_wav)
+            cached = pipeline._load_audio_cache(md5)
+            if cached and "words" in cached:
+                cached_words = cached["words"]
+        except Exception as e:
+            logger.warning(f"[server] Could not probe audio cache for batch: {e}")
 
     with _batch_lock:
         _batches[batch_id] = {

@@ -403,7 +403,8 @@
                             speed: renderSpeed,
                             watermark_logo: selectedLogo || null,
                             brand_logo: selectedLogo || null,
-                            aspect_ratio: '9:16'
+                            aspect_ratio: '9:16',
+                            audio_md5: (ingestData && ingestData.audio_md5) ? ingestData.audio_md5 : null
                         })
                     });
 
@@ -607,7 +608,10 @@
                                         type="text"
                                         placeholder="https://youtube.com/watch?v=... or Drive URL"
                                         value={remoteUrl}
-                                        onChange={(e) => setRemoteUrl(e.target.value)}
+                                        onChange={(e) => {
+                                            setRemoteUrl(e.target.value);
+                                            if (e.target.value.trim()) setSelectedVideo('');
+                                        }}
                                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition"
                                     />
                                 </div>
@@ -621,10 +625,13 @@
                                 </label>
                                 <select
                                     value={selectedVideo}
-                                    onChange={(e) => setSelectedVideo(e.target.value)}
+                                    onChange={(e) => {
+                                        setSelectedVideo(e.target.value);
+                                        if (e.target.value) setRemoteUrl('');
+                                    }}
                                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition cursor-pointer"
                                 >
-                                    {videos.length === 0 && <option value="">No local videos found</option>}
+                                    <option value="">-- Choose a local video --</option>
                                     {videos.map(v => (
                                         <option key={v} value={v}>{v}</option>
                                     ))}
