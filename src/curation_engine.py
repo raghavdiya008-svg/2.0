@@ -738,6 +738,81 @@ def compute_audio_energy_profile(media_path: str) -> List[float]:
                 pass
 
 
+def compute_visual_hook_score(media_path: str, start_t: float, end_t: float) -> Tuple[float, str]:
+    """
+    Evaluates visual dynamism and face presence in the first 2.0s of a candidate clip.
+    Returns (score 0..100, tag).
+    """
+    if not media_path:
+        return 75.0, ""
+    target_path = media_path
+    if not os.path.isfile(target_path):
+        candidate = os.path.join("inputs", media_path)
+        if os.path.isfile(candidate):
+            target_path = candidate
+        else:
+            return 75.0, ""
+
+    ext = os.path.splitext(target_path)[1].lower()
+    if ext not in [".mp4", ".mov", ".mkv", ".avi", ".webm"]:
+        return 75.0, ""
+
+    try:
+        import cv2
+        cap = cv2.VideoCapture(target_path)
+        if not cap.isOpened():
+            return 75.0, ""
+
+        sample_times = [start_t + offset for offset in [0.0, 0.5, 1.0, 1.5] if (start_t + offset) <= end_t]
+        frames = []
+        for st in sample_times:
+            cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, st * 1000.0))
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                small = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                frames.append(gray)
+        cap.release()
+
+        if len(frames) < 2:
+            return 75.0, ""
+
+        # 1. Motion Dynamics (Frame difference)
+        diffs = []
+        for i in range(len(frames) - 1):
+            diff = cv2.absdiff(frames[i], frames[i + 1])
+            diffs.append(float(diff.mean()))
+        avg_motion = sum(diffs) / len(diffs) if diffs else 0.0
+
+        # 2. Fast Face Presence Check
+        face_detected = False
+        try:
+            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            if os.path.isfile(cascade_path):
+                face_cascade = cv2.CascadeClassifier(cascade_path)
+                for f in frames:
+                    faces = face_cascade.detectMultiScale(f, scaleFactor=1.2, minNeighbors=4, minSize=(30, 30))
+                    if len(faces) > 0:
+                        face_detected = True
+                        break
+        except Exception:
+            pass
+
+        if avg_motion >= 6.0 and face_detected:
+            return 90.0, "[Visual Hook: Dynamic Motion & Face Present]"
+        elif avg_motion >= 4.0:
+            return 82.0, "[Visual Hook: Active Motion]"
+        elif face_detected:
+            return 80.0, "[Visual Hook: Face Present]"
+        elif avg_motion < 1.5:
+            return 55.0, "[Visual Alert: Static Scene]"
+        else:
+            return 72.0, ""
+    except Exception as e:
+        logger.debug(f"[curation] Visual hook analysis failed: {e}")
+        return 75.0, ""
+
+
 def get_viral_cuts(
     words: list,
     silence_gaps: list,
@@ -745,7 +820,7 @@ def get_viral_cuts(
     file_name: str = "",
 ) -> list:
     """
-    Main entry point for curation. Routes through multi-modal LLM + acoustic
+    Main entry point for curation. Routes through tri-modal LLM + acoustic + visual
     scoring when words are available, then falls back to even-interval / RMS
     split on failure or empty words.
     Always runs validate_and_format_cuts() on the final output.
@@ -772,14 +847,19 @@ def get_viral_cuts(
         try:
             llm_cuts = score_transcript_with_llm(words, silence_gaps, total_duration)
             if llm_cuts:
-                # Multi-Modal Signal Fusion: Modulate LLM semantic virality with acoustic vocal energy
+                # Tri-Modal Signal Fusion: Modulate LLM semantic virality with acoustic + visual dynamics
                 if file_name:
                     energy_profile = compute_audio_energy_profile(file_name)
-                    if energy_profile:
-                        global_avg_rms = sum(energy_profile) / len(energy_profile) if energy_profile else 1.0
-                        for cut in llm_cuts:
-                            s_sec = int(max(0, math.floor(cut.get("start", 0.0))))
-                            e_sec = int(min(len(energy_profile), math.ceil(cut.get("end", 0.0))))
+                    global_avg_rms = sum(energy_profile) / len(energy_profile) if energy_profile else 1.0
+                    
+                    for cut in llm_cuts:
+                        c_start = float(cut.get("start", 0.0))
+                        c_end = float(cut.get("end", 0.0))
+                        
+                        # 1. Acoustic Energy Modulation
+                        if energy_profile:
+                            s_sec = int(max(0, math.floor(c_start)))
+                            e_sec = int(min(len(energy_profile), math.ceil(c_end)))
                             clip_rms = energy_profile[s_sec:e_sec]
                             if clip_rms:
                                 clip_avg = sum(clip_rms) / len(clip_rms)
@@ -800,10 +880,20 @@ def get_viral_cuts(
                                     cut["reason"] = f"{cut.get('reason', '')} {tag}".strip()
                                 orig_score = cut.get("virality_score", 85)
                                 cut["virality_score"] = max(0, min(100, int(orig_score + boost)))
-                        llm_cuts = validate_and_format_cuts(llm_cuts, total_duration)
 
-                logger.info("[curation] Path: Multi-Modal LLM + Acoustic Energy scoring.")
-                print("[curation] Path: Multi-Modal LLM + Acoustic Energy scoring.")
+                        # 2. Visual Scene Dynamics & Face Hook Modulation
+                        v_score, v_tag = compute_visual_hook_score(file_name, c_start, c_end)
+                        if v_score >= 85:
+                            cut["virality_score"] = min(100, cut.get("virality_score", 85) + 3)
+                        elif v_score <= 60:
+                            cut["virality_score"] = max(0, cut.get("virality_score", 85) - 3)
+                        if v_tag:
+                            cut["reason"] = f"{cut.get('reason', '')} {v_tag}".strip()
+
+                    llm_cuts = validate_and_format_cuts(llm_cuts, total_duration)
+
+                logger.info("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")
+                print("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")
                 return llm_cuts
         except Exception as exc:
             logger.warning(f"[curation] LLM path raised exception ({exc}); using fallback.")

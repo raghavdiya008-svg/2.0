@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  studio:
+    build: .
+    container_name: autonomous_video_studio_2.0
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - TUNNEL=0
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ./inputs:/app/inputs
+      - ./outputs:/app/outputs
+      - ./pipeline.db:/app/pipeline.db
+      - ./global_audio_cache.json:/app/global_audio_cache.json
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

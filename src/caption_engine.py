@@ -331,7 +331,11 @@ def generate_karaoke_ass(
                 # then reset trailing text to default white
                 dur = max(0.05, w_end - w_start)
                 cs_dur = max(1, int(round(dur * 100)))
-                karaoke_parts.append(f"{{\\c{active_tag_color}\\kf{cs_dur}}}{word_text}{{\\c{inactive_tag_color}}} ")
+                kinetic_bounce = kwargs.get("kinetic_bounce", True)
+                if kinetic_bounce:
+                    karaoke_parts.append(f"{{\\c{active_tag_color}\\fscx110\\fscy110\\kf{cs_dur}}}{word_text}{{\\fscx100\\fscy100\\c{inactive_tag_color}}} ")
+                else:
+                    karaoke_parts.append(f"{{\\c{active_tag_color}\\kf{cs_dur}}}{word_text}{{\\c{inactive_tag_color}}} ")
                 t_cursor = w_end
 
             karaoke_str = "".join(karaoke_parts).rstrip()

@@ -88,8 +88,73 @@ _batches: Dict[str, Dict[str, Any]] = {}
 _progress_lock = threading.RLock()
 _progress_logs: Dict[str, Dict[str, Any]] = {}
 
+DB_PATH = os.path.join(_ROOT_DIR, "pipeline.db")
+
+def _init_server_tables():
+    """Initializes durable SQLite tables for batch and progress recovery across restarts."""
+    try:
+        import sqlite3
+        with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute('''CREATE TABLE IF NOT EXISTS server_batches (
+                batch_id TEXT PRIMARY KEY,
+                status TEXT,
+                data_json TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS server_progress (
+                process_id TEXT PRIMARY KEY,
+                stage TEXT,
+                progress_pct INTEGER,
+                data_json TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
+            # Restore saved batches into memory
+            cur = conn.execute("SELECT batch_id, data_json FROM server_batches")
+            for bid, djson in cur.fetchall():
+                try:
+                    _batches[bid] = json.loads(djson)
+                except Exception:
+                    pass
+            # Restore recent progress
+            cur_p = conn.execute("SELECT process_id, data_json FROM server_progress ORDER BY updated_at DESC LIMIT 50")
+            for pid, pjson in cur_p.fetchall():
+                try:
+                    _progress_logs[pid] = json.loads(pjson)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"[server] Failed to initialize server SQLite tables: {e}")
+
+_init_server_tables()
+
+def _persist_batch_to_db(batch_id: str, data: dict):
+    """Saves batch state persistently to SQLite."""
+    try:
+        import sqlite3
+        with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO server_batches (batch_id, status, data_json, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                (batch_id, str(data.get("status", "processing")), json.dumps(data))
+            )
+    except Exception as e:
+        logger.debug(f"[server] Batch persist non-fatal: {e}")
+
+def _persist_progress_to_db(process_id: str, data: dict):
+    """Saves progress state persistently to SQLite."""
+    try:
+        import sqlite3
+        with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO server_progress (process_id, stage, progress_pct, data_json, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (process_id, str(data.get("stage", "general")), int(data.get("progress_pct", 0)), json.dumps(data))
+            )
+    except Exception as e:
+        logger.debug(f"[server] Progress persist non-fatal: {e}")
+
 def _log_progress(process_id: str, message: str, stage: str = "general", progress_pct: int = 0, is_done: bool = False, error: Optional[str] = None, result: Optional[Any] = None):
-    """Appends a timestamped log entry to the in-memory progress tracker for process_id."""
+    """Appends a timestamped log entry to the progress tracker and persists to SQLite."""
     if not process_id:
         return
     with _progress_lock:
@@ -116,6 +181,7 @@ def _log_progress(process_id: str, message: str, stage: str = "general", progres
         p["logs"].append(f"[{timestamp}] {message}")
         p["updated_at"] = time.time()
         logger.info(f"[progress:{process_id}] {message}")
+        _persist_progress_to_db(process_id, p)
 
 def secure_filename(filename: str) -> str:
     """Sanitizes filename for filesystem safety."""
@@ -916,6 +982,8 @@ def api_render_batch(req: BatchRenderRequest):
             _batches[batch_id]["job_ids"].append(job_id)
             job_ids.append(job_id)
 
+        _persist_batch_to_db(batch_id, _batches[batch_id])
+
     return {
         "status": "queued",
         "batch_id": batch_id,
@@ -967,6 +1035,10 @@ def api_batch_status(batch_id: str):
                 zip_url = f"/api/download_zip/{batch_id}"
 
         progress_pct = int(round((completed / max(1, total)) * 100))
+
+        if overall_status != batch.get("status"):
+            batch["status"] = overall_status
+            _persist_batch_to_db(batch_id, batch)
 
         return {
             "batch_id": batch_id,
