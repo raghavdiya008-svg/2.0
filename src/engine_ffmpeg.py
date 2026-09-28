@@ -30,8 +30,16 @@ def get_cfr_args() -> list:
         pass
     return ["-vsync", "cfr"]
 
-@functools.lru_cache(maxsize=1)
+_NVENC_FORCE_DISABLED = False
+
 def is_nvenc_available() -> bool:
+    global _NVENC_FORCE_DISABLED
+    if _NVENC_FORCE_DISABLED:
+        return False
+    return _probe_nvenc()
+
+@functools.lru_cache(maxsize=1)
+def _probe_nvenc() -> bool:
     try:
         res = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
         return "h264_nvenc" in res.stdout
@@ -785,6 +793,8 @@ def render_clip(
             for k in ["h264_nvenc", "nvenc", "nvcuda", "cuda", "cannot load nvcuda", "device creation failed", "unknown encoder"]
         ) or e.returncode == 8
         if is_nvenc_err and "-c:v" in cmd and "h264_nvenc" in cmd:
+            global _NVENC_FORCE_DISABLED
+            _NVENC_FORCE_DISABLED = True
             print("[engine_ffmpeg] Warning: NVENC unavailable. Falling back to CPU libx264...")
             fallback_cmd = list(cmd)
             idx = fallback_cmd.index("h264_nvenc")

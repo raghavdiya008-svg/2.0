@@ -683,6 +683,61 @@ def _audio_energy_fallback(video_path: str, target_clips: int) -> list:
     return spikes
 
 
+def compute_audio_energy_profile(media_path: str) -> List[float]:
+    """Computes a per-second RMS audio energy profile for multi-modal signal fusion."""
+    if not media_path:
+        return []
+    target_path = media_path
+    if not os.path.isfile(target_path):
+        candidate = os.path.join("inputs", media_path)
+        if os.path.isfile(candidate):
+            target_path = candidate
+        else:
+            return []
+
+    temp_wav = None
+    try:
+        if target_path.lower().endswith(".wav"):
+            wav_file = target_path
+        else:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                temp_wav = tf.name
+            try:
+                import audio_intelligence
+            except ImportError:
+                import src.audio_intelligence as audio_intelligence
+            audio_intelligence.extract_audio(target_path, temp_wav)
+            wav_file = temp_wav
+
+        import wave, struct, math
+        with wave.open(wav_file, 'rb') as wf:
+            rate = wf.getframerate()
+            nframes = wf.getnframes()
+            chunk_size = rate
+            if chunk_size <= 0:
+                return []
+            num_chunks = int(nframes / chunk_size)
+            energies = []
+            for _ in range(num_chunks):
+                raw = wf.readframes(chunk_size)
+                if len(raw) < 2:
+                    break
+                samples = struct.unpack(f"{len(raw)//2}h", raw)
+                rms = math.sqrt(sum(s * s for s in samples) / len(samples)) if samples else 0.0
+                energies.append(rms)
+            return energies
+    except Exception as e:
+        logger.debug(f"[curation] Audio energy profile generation failed: {e}")
+        return []
+    finally:
+        if temp_wav and os.path.exists(temp_wav):
+            try:
+                os.remove(temp_wav)
+            except OSError:
+                pass
+
+
 def get_viral_cuts(
     words: list,
     silence_gaps: list,
@@ -690,8 +745,9 @@ def get_viral_cuts(
     file_name: str = "",
 ) -> list:
     """
-    Main entry point for curation. Routes through LLM scoring when words are
-    available, then falls back to even-interval split on failure or empty words.
+    Main entry point for curation. Routes through multi-modal LLM + acoustic
+    scoring when words are available, then falls back to even-interval / RMS
+    split on failure or empty words.
     Always runs validate_and_format_cuts() on the final output.
     """
     try:
@@ -716,8 +772,38 @@ def get_viral_cuts(
         try:
             llm_cuts = score_transcript_with_llm(words, silence_gaps, total_duration)
             if llm_cuts:
-                logger.info("[curation] Path: LLM scoring (real AI curation).")
-                print("[curation] Path: LLM scoring (real AI curation).")
+                # Multi-Modal Signal Fusion: Modulate LLM semantic virality with acoustic vocal energy
+                if file_name:
+                    energy_profile = compute_audio_energy_profile(file_name)
+                    if energy_profile:
+                        global_avg_rms = sum(energy_profile) / len(energy_profile) if energy_profile else 1.0
+                        for cut in llm_cuts:
+                            s_sec = int(max(0, math.floor(cut.get("start", 0.0))))
+                            e_sec = int(min(len(energy_profile), math.ceil(cut.get("end", 0.0))))
+                            clip_rms = energy_profile[s_sec:e_sec]
+                            if clip_rms:
+                                clip_avg = sum(clip_rms) / len(clip_rms)
+                                ratio = clip_avg / max(global_avg_rms, 1e-6)
+                                if ratio >= 1.4:
+                                    boost = 6
+                                    tag = "[Acoustic Peak: High Vocal Energy]"
+                                elif ratio >= 1.15:
+                                    boost = 3
+                                    tag = "[Acoustic Peak: Elevated Energy]"
+                                elif ratio <= 0.65:
+                                    boost = -5
+                                    tag = "[Acoustic Dampener: Low Energy Pitch]"
+                                else:
+                                    boost = 0
+                                    tag = ""
+                                if tag:
+                                    cut["reason"] = f"{cut.get('reason', '')} {tag}".strip()
+                                orig_score = cut.get("virality_score", 85)
+                                cut["virality_score"] = max(0, min(100, int(orig_score + boost)))
+                        llm_cuts = validate_and_format_cuts(llm_cuts, total_duration)
+
+                logger.info("[curation] Path: Multi-Modal LLM + Acoustic Energy scoring.")
+                print("[curation] Path: Multi-Modal LLM + Acoustic Energy scoring.")
                 return llm_cuts
         except Exception as exc:
             logger.warning(f"[curation] LLM path raised exception ({exc}); using fallback.")

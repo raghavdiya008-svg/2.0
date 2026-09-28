@@ -288,7 +288,7 @@ def verify_lease(
     try:
         payload = _check_lease_file(target_path)
     except LicenseError as err:
-        if auto_issue_dev and target_path == DEFAULT_LEASE_PATH:
+        if auto_issue_dev and os.path.abspath(target_path) == os.path.abspath(DEFAULT_LEASE_PATH):
             logger.info(f"[licensing] Dev lease invalid/expired ({err}). Auto-renewing development lease...")
             generate_dev_lease(target_path, duration_hours=72.0)
             payload = _check_lease_file(target_path)

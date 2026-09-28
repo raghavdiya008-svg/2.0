@@ -32,10 +32,23 @@ if _SRC_DIR not in sys.path:
 
 _ROOT_DIR = os.path.abspath(os.path.join(_SRC_DIR, ".."))
 
-INPUTS_DIR = os.path.join(_ROOT_DIR, "inputs")
+# Persistent cloud storage detection (Google Drive in Colab or explicit env var)
+DRIVE_BASE = "/content/drive/MyDrive/2.0_Autonomous_Studio"
+PERSISTENT_ROOT = os.environ.get("PERSISTENT_STORAGE_DIR")
+if not PERSISTENT_ROOT and os.path.isdir("/content/drive/MyDrive") and not os.environ.get("DISABLE_DRIVE_SYNC"):
+    PERSISTENT_ROOT = DRIVE_BASE
+
+if PERSISTENT_ROOT:
+    os.makedirs(PERSISTENT_ROOT, exist_ok=True)
+    INPUTS_DIR = os.path.join(PERSISTENT_ROOT, "inputs")
+    OUTPUTS_DIR = os.path.join(PERSISTENT_ROOT, "outputs")
+    print(f"[server] 🚀 Persistent Storage Active: {PERSISTENT_ROOT}")
+else:
+    INPUTS_DIR = os.path.join(_ROOT_DIR, "inputs")
+    OUTPUTS_DIR = os.path.join(_ROOT_DIR, "outputs")
+
 ASSETS_DIR = os.path.join(_ROOT_DIR, "assets")
 TEMP_DIR = os.path.join(_ROOT_DIR, "temp")
-OUTPUTS_DIR = os.path.join(_ROOT_DIR, "outputs")
 LOGO_DIR = os.path.join(_ROOT_DIR, "assets", "logo")
 EMOJIS_DIR = os.path.join(_ROOT_DIR, "assets", "emojis")
 

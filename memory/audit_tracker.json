@@ -1,10 +1,10 @@
 {
   "tracker_id": "2.0-server-audit-sync-v1",
-  "last_synced_at": "2026-09-26T14:19:13.822681Z",
-  "last_synced_timestamp": 1790432353.8226817,
+  "last_synced_at": "2026-09-28T09:13:04.511594Z",
+  "last_synced_timestamp": 1790586784.5115945,
   "system_audit": {
     "engine_version": "2.0-autonomous",
-    "timestamp": "2026-09-26T14:19:13.822681Z",
+    "timestamp": "2026-09-28T09:13:04.511594Z",
     "platform": "Windows-10-10.0.26200-SP0",
     "python_version": "3.10.11",
     "phases_compliance": {
@@ -38,49 +38,34 @@
   },
   "git_state": {
     "branch": "main",
-    "commit_sha": "da8b17d1188ae0573de110a5ca0b48e5e7a79d3a",
+    "commit_sha": "aa07ec12232a671229deb6fe303b9827cb703def",
     "remote_origin": "https://raghavdiya008-svg@github.com/raghavdiya008-svg/2.0.git",
     "working_tree_clean": false,
     "uncommitted_files": [
       "M docs/AUDIT_MEMORY_TRACKER.md",
       " M license.lease",
       " M memory/audit_tracker.json",
-      " M src/media_downloader.py",
-      " M src/server.py",
-      " M src/templates/index.html"
+      " M src/curation_engine.py",
+      " M src/engine_ffmpeg.py",
+      " M src/licensing/lease.py",
+      " M src/server.py"
     ]
   },
   "pipeline_db": {
     "exists": true,
-    "total_jobs": 3,
+    "total_jobs": 1,
     "status_counts": {
       "queued": 0,
-      "running": 0,
-      "completed": 3,
+      "running": 1,
+      "completed": 0,
       "failed": 0
     },
     "recent_jobs": [
       {
-        "job_id": "job_1",
-        "status": "completed",
-        "created_at": "2026-09-26 14:18:56",
-        "updated_at": "2026-09-26 14:18:56",
-        "error_message": null,
-        "payload_summary": {}
-      },
-      {
-        "job_id": "job_2",
-        "status": "completed",
-        "created_at": "2026-09-26 14:18:56",
-        "updated_at": "2026-09-26 14:18:56",
-        "error_message": null,
-        "payload_summary": {}
-      },
-      {
-        "job_id": "job_3",
-        "status": "completed",
-        "created_at": "2026-09-26 14:18:56",
-        "updated_at": "2026-09-26 14:18:57",
+        "job_id": "strict_job",
+        "status": "running",
+        "created_at": "2026-09-28 09:12:37",
+        "updated_at": "2026-09-28 09:12:37",
         "error_message": null,
         "payload_summary": {}
       }
@@ -102,11 +87,11 @@
     ]
   },
   "licensing": {
-    "hwid": "9058140311094021e487da258e93a6f59e156a59fe9d8a1a908c2e0b028e8a46",
+    "hwid": "bc352704d1212d748b6b93ed5a6869c7036d95588238faa6d4add07e90027bea",
     "license_valid": true,
     "license_type": "development",
-    "issued_at": 1790432322.54,
-    "expires_at": 1790691522.54,
+    "issued_at": 1790586662.61,
+    "expires_at": 1790845862.61,
     "max_offline_hours": 72.0
   }
 }
