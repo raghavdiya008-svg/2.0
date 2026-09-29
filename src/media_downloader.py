@@ -34,6 +34,30 @@ def _ytdlp_cmd() -> list:
     return [sys.executable, "-m", "yt_dlp"]
 
 
+def _ytdlp_extra_args() -> list:
+    """
+    Returns extra resilience flags for yt-dlp to bypass bot-detection on cloud VMs
+    (Kaggle, Colab, Docker).
+
+    - --cookies cookies.txt  → injected only when cookies.txt exists in the project root.
+      Export your YouTube cookies via the 'Get cookies.txt LOCALLY' browser extension
+      and place the file at the project root to unblock age-restricted / bot-challenged videos.
+    - --extractor-args youtube:player_client=tv,web
+      → Uses YouTube's TV client (innertube) which is far less aggressively bot-checked
+      than the default web client. Falls back to the normal web client automatically.
+    - --no-check-certificates → avoids TLS errors common inside restricted cloud networks.
+    """
+    extra = [
+        "--extractor-args", "youtube:player_client=tv,web",
+        "--no-check-certificates",
+    ]
+    cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
+    if os.path.isfile(cookies_path):
+        extra += ["--cookies", cookies_path]
+        logger.info(f"[media_downloader] Using cookies file: {cookies_path}")
+    return extra
+
+
 def is_youtube_url(url: str) -> bool:
     """Checks if the URL is a YouTube URL."""
     if not url:
@@ -90,7 +114,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     duration = 0.0
     try:
         result = subprocess.run(
-            _ytdlp_cmd() + ["--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url],
+            _ytdlp_cmd() + _ytdlp_extra_args() + ["--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -135,7 +159,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
     # ── Step 3: Download via yt-dlp CLI subprocess (user's proven approach) ──
     print(f"[media_downloader] Downloading YouTube video: {url}")
-    cmd = _ytdlp_cmd() + [
+    cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
         "--merge-output-format", "mp4",
         "-o", safe_filename,
@@ -148,7 +172,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     if result.returncode != 0 or not os.path.isfile(safe_filename):
         # Fallback: try without height constraint (catches age-restricted or geo-locked videos)
         print("[media_downloader] Primary format failed — retrying with relaxed format...")
-        fallback_cmd = _ytdlp_cmd() + [
+        fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
             "-f", "best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", safe_filename,

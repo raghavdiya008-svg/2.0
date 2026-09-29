@@ -21,6 +21,30 @@ def setup_kaggle_environment():
     # Check if running in Kaggle
     is_kaggle = os.path.exists("/kaggle") or "KAGGLE_KERNEL_RUN_TYPE" in os.environ
     print(f"Detecting Kaggle Environment: {is_kaggle}")
+
+    # ── Pull latest code & bust stale .pyc cache ─────────────────────────────
+    print("\nPulling latest code from git...")
+    try:
+        subprocess.run(["git", "pull", "--ff-only"], check=False)
+    except Exception as e:
+        print(f"git pull skipped (non-fatal): {e}")
+
+    print("Clearing stale Python bytecode cache...")
+    try:
+        import glob as _glob
+        for pyc in _glob.glob("**/__pycache__/*.pyc", recursive=True):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+        for pycache in _glob.glob("**/__pycache__", recursive=True):
+            try:
+                os.rmdir(pycache)
+            except OSError:
+                pass
+    except Exception as e:
+        print(f"Cache clear skipped (non-fatal): {e}")
+    # ─────────────────────────────────────────────────────────────────────────
     
     dependencies = [
         "whisperx",
