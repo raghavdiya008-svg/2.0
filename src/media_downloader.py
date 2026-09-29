@@ -11,6 +11,7 @@ import re
 import sys
 import json
 import logging
+import shutil
 import subprocess
 from typing import Dict, Any, Optional
 
@@ -19,6 +20,18 @@ logger = logging.getLogger("media_downloader")
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SRC_DIR, ".."))
 INPUTS_DIR = os.path.join(_PROJECT_ROOT, "inputs")
+
+
+def _ytdlp_cmd() -> list:
+    """
+    Returns the correct command prefix for yt-dlp.
+    Prefers the standalone binary (yt-dlp) if it exists on PATH.
+    Falls back to `python -m yt_dlp` when only the Python package is installed
+    (common in venv/pip-only environments like Kaggle or Windows without PATH setup).
+    """
+    if shutil.which("yt-dlp"):
+        return ["yt-dlp"]
+    return [sys.executable, "-m", "yt_dlp"]
 
 
 def is_youtube_url(url: str) -> bool:
@@ -77,7 +90,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     duration = 0.0
     try:
         result = subprocess.run(
-            ["yt-dlp", "--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url],
+            _ytdlp_cmd() + ["--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -122,8 +135,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
     # ── Step 3: Download via yt-dlp CLI subprocess (user's proven approach) ──
     print(f"[media_downloader] Downloading YouTube video: {url}")
-    cmd = [
-        "yt-dlp",
+    cmd = _ytdlp_cmd() + [
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
         "--merge-output-format", "mp4",
         "-o", safe_filename,
@@ -136,8 +148,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     if result.returncode != 0 or not os.path.isfile(safe_filename):
         # Fallback: try without height constraint (catches age-restricted or geo-locked videos)
         print("[media_downloader] Primary format failed — retrying with relaxed format...")
-        fallback_cmd = [
-            "yt-dlp",
+        fallback_cmd = _ytdlp_cmd() + [
             "-f", "best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", safe_filename,
