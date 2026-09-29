@@ -64,11 +64,19 @@ def setup_kaggle_environment():
         except Exception as e:
             print(f"Failed to update system packages: {e}")
             
-        print("\nInstalling Ollama (if missing)...")
-        try:
-            subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True, check=True)
-        except Exception as e:
-            print(f"Failed to install Ollama: {e}")
+        has_cloud_api = any(os.environ.get(k) for k in [
+            "KIMI_API_KEY", "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY",
+            "GEMINI_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
+            "OPENROUTER_API_KEY", "LLM_API_KEY"
+        ])
+        if has_cloud_api:
+            print("\n[API] Cloud Frontier LLM API key detected! Skipping local Ollama setup and VRAM loading.")
+        else:
+            print("\nInstalling Ollama (if missing)...")
+            try:
+                subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True, check=True)
+            except Exception as e:
+                print(f"Failed to install Ollama: {e}")
 
         print("\nInstalling Kaggle GPU dependencies...")
         for pkg in dependencies:

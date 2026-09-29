@@ -503,7 +503,230 @@ def _chunk_words(words: List[Dict], chunk_sec: float, overlap_sec: float) -> Lis
 
 
 # ---------------------------------------------------------------------------
-# 4. Main scoring function
+# 3b. Cloud Frontier LLM API Provider (Kimi K3, DeepSeek, Gemini, OpenAI)
+# ---------------------------------------------------------------------------
+
+def get_cloud_api_config() -> Optional[Dict[str, str]]:
+    """
+    Detects configured Cloud LLM API credentials from environment variables.
+    Supports Kimi / Moonshot, DeepSeek, Gemini, OpenAI, or generic OpenAI-compatible endpoints.
+    Priority order:
+      1. Explicit LLM_API_KEY + optional LLM_BASE_URL / LLM_MODEL
+      2. KIMI_API_KEY or MOONSHOT_API_KEY -> https://api.moonshot.cn/v1, moonshot-v1-128k
+      3. DEEPSEEK_API_KEY -> https://api.deepseek.com/v1, deepseek-chat
+      4. GEMINI_API_KEY -> https://generativelanguage.googleapis.com/v1beta/openai, gemini-2.0-flash
+      5. OPENAI_API_KEY -> https://api.openai.com/v1, gpt-4o-mini
+    """
+    api_key = os.environ.get("LLM_API_KEY")
+    if api_key:
+        return {
+            "api_key": api_key,
+            "base_url": os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+            "model": os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+            "provider": "custom_openai",
+        }
+
+    kimi_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")
+    if kimi_key:
+        return {
+            "api_key": kimi_key,
+            "base_url": os.environ.get("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/"),
+            "model": os.environ.get("KIMI_MODEL", os.environ.get("MOONSHOT_MODEL", "moonshot-v1-128k")),
+            "provider": "kimi",
+        }
+
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+    if deepseek_key:
+        return {
+            "api_key": deepseek_key,
+            "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/"),
+            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "provider": "deepseek",
+        }
+
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        return {
+            "api_key": gemini_key,
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+            "provider": "gemini",
+        }
+
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        return {
+            "api_key": groq_key,
+            "base_url": "https://api.groq.com/openai/v1",
+            "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "provider": "groq",
+        }
+
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    if openrouter_key:
+        return {
+            "api_key": openrouter_key,
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat"),
+            "provider": "openrouter",
+        }
+
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        return {
+            "api_key": openai_key,
+            "base_url": "https://api.openai.com/v1",
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "provider": "openai",
+        }
+
+    return None
+
+
+def _call_openai_compatible_api(
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    system: str,
+    timeout: float = 120.0
+) -> Optional[str]:
+    """Sends a chat completion request to any OpenAI-compatible API endpoint using urllib."""
+    import urllib.request
+    import urllib.error
+
+    endpoint = f"{base_url}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "AutonomousStudio/2.0",
+    }
+    
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            choices = data.get("choices", [])
+            if choices and len(choices) > 0:
+                message = choices[0].get("message", {})
+                return message.get("content", "")
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        logger.warning(f"[curation] Cloud API HTTP {e.code}: {e.reason} - {err_body[:200]}")
+    except Exception as exc:
+        logger.warning(f"[curation] Cloud API call failed: {exc}")
+
+    return None
+
+
+def score_transcript_with_api(
+    words: List[Dict],
+    silence_gaps: List,
+    total_duration: float,
+    api_config: Dict[str, str],
+) -> List[Dict]:
+    """
+    Scores transcript using cloud frontier model API (Kimi K3, DeepSeek, Gemini, etc.)
+    with a single whole-video pass or large window chunks.
+    Takes 0 VRAM and executes in seconds.
+    """
+    if not words:
+        logger.info("[curation] No words supplied; skipping Cloud API scoring.")
+        return []
+
+    provider = api_config.get("provider", "cloud_api")
+    model = api_config.get("model", "unknown")
+    base_url = api_config.get("base_url", "")
+    api_key = api_config.get("api_key", "")
+
+    logger.info(f"[curation] [API] Cloud Frontier API Active: Provider={provider}, Model={model}")
+    print(f"[curation] [API] Cloud Frontier API Active: Provider={provider}, Model={model}")
+
+    target_clips = max(3, min(15, int(round((total_duration / 3600.0) * 12.0))))
+    transcript_text = _build_transcript_text(words)
+
+    # Check cache by SHA-256
+    import hashlib
+    cache_key = hashlib.sha256((model + transcript_text).encode()).hexdigest()
+    if cache_key in _llm_cache:
+        logger.info(f"[curation] Cloud API cache hit for {model} (key: {cache_key[:12]})")
+        print(f"[curation] Cloud API cache hit for {model}")
+        return _llm_cache[cache_key]
+
+    system_prompt = (
+        "You are an elite short-form video viral content strategist (TikTok, YouTube Shorts, Reels).\n"
+        "Your task is to identify the highest-retention, most viral 30-50 second moments from this video transcript.\n\n"
+        "Evaluation criteria for virality:\n"
+        "1. HOOK POWER: The first 3 seconds must provoke intense curiosity, present a bold counter-intuitive claim, or drop right into high drama/action.\n"
+        "2. NARRATIVE COMPLETENESS: The soundbite must make sense standalone without external context.\n"
+        "3. HIGH PAYOFF: Concludes with a punchline, valuable insight, or mind-blowing revelation.\n"
+        "4. QUOTABILITY: High shareability and comment provocation.\n\n"
+        "You MUST return a JSON object with a single key 'clips' containing an array of objects.\n"
+        "Each clip object must have EXACTLY these keys:\n"
+        "  - 'start': float (start timestamp in seconds)\n"
+        "  - 'end': float (end timestamp in seconds)\n"
+        "  - 'viral_score': integer (75 to 100)\n"
+        "  - 'title': string (viral click-worthy headline)\n"
+        "  - 'hook_summary': string (1-sentence summary of the hook)\n"
+        "  - 'virality_reason': string (why this specific moment retains viewers)\n"
+        "Duration (end - start) MUST be strictly between 30 and 50 seconds."
+    )
+
+    user_prompt = (
+        f"Video total duration: {total_duration:.1f}s ({total_duration/60.0:.1f} minutes).\n\n"
+        f"Timestamped Transcript:\n{transcript_text}\n\n"
+        f"Identify the top {target_clips} most viral, high-retention segments across this entire video.\n"
+        f"All timestamps must be between 0.0s and {total_duration:.1f}s.\n"
+        f"Return strictly JSON formatted as {{\"clips\": [...]}}."
+    )
+
+    raw_response = _call_openai_compatible_api(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        prompt=user_prompt,
+        system=system_prompt,
+        timeout=120.0
+    )
+
+    if not raw_response:
+        logger.warning(f"[curation] Cloud API call to {provider} returned empty response.")
+        return []
+
+    cuts = _parse_llm_json(raw_response, total_duration)
+    if cuts:
+        validated = validate_and_format_cuts(cuts, total_duration)
+        logger.info(f"[curation] Cloud API {provider} selected {len(validated)} validated viral cuts.")
+        print(f"[curation] Cloud API {provider} selected {len(validated)} validated viral cuts.")
+        _llm_cache[cache_key] = validated
+        return validated
+
+    logger.warning(f"[curation] Failed to parse valid cuts from Cloud API {provider} response.")
+    return []
+
+
+# ---------------------------------------------------------------------------
+# 4. Main scoring function (Local Ollama)
 # ---------------------------------------------------------------------------
 
 def score_transcript_with_llm(
@@ -842,10 +1065,18 @@ def get_viral_cuts(
             "reason": "Optimal standalone soundbite meeting duration threshold.",
         }]
 
-    # Attempt LLM path when transcript words are available and dialogue is dense enough
+    # Attempt Cloud Frontier API or local Ollama path when transcript words are available
     if words and len(words) >= 80:
         try:
-            llm_cuts = score_transcript_with_llm(words, silence_gaps, total_duration)
+            llm_cuts = []
+            api_config = get_cloud_api_config()
+            if api_config:
+                llm_cuts = score_transcript_with_api(words, silence_gaps, total_duration, api_config)
+
+            # Fall back to local Ollama if Cloud API returned no cuts or was not configured
+            if not llm_cuts:
+                llm_cuts = score_transcript_with_llm(words, silence_gaps, total_duration)
+
             if llm_cuts:
                 # Tri-Modal Signal Fusion: Modulate LLM semantic virality with acoustic + visual dynamics
                 if file_name:
