@@ -46,97 +46,125 @@ def sanitize_filename(name: str) -> str:
     return clean[:80] or "video"
 
 
+def _probe_duration(file_path: str) -> float:
+    """Returns video duration in seconds using ffprobe."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", file_path],
+            capture_output=True, text=True
+        )
+        if probe.returncode == 0 and probe.stdout.strip():
+            return float(probe.stdout.strip())
+    except Exception:
+        pass
+    return 0.0
+
+
 def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, Any]:
     """
-    Downloads a YouTube video via yt_dlp.
+    Downloads a YouTube video via the yt-dlp CLI subprocess (not the Python library).
+    Using the CLI binary bypasses the bot-detection that blocks Python API callers
+    on cloud VMs (Kaggle, Colab, Docker).
+
     Returns dictionary with file_path, file_name, title, duration.
     Reuses existing file if already downloaded in output_dir.
     """
-    import yt_dlp
-
     os.makedirs(output_dir, exist_ok=True)
-    out_template = os.path.join(output_dir, "%(title).80s.%(ext)s")
 
-    ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "outtmpl": out_template,
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "quiet": False,
-        "no_warnings": False,
-    }
+    # ── Step 1: Probe metadata to check deduplication ────────────────────────
+    title = "youtube_video"
+    duration = 0.0
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split("\t")
+            title = parts[0].strip() if parts else title
+            duration = float(parts[1].strip()) if len(parts) > 1 else 0.0
+    except Exception as e:
+        logger.debug(f"[media_downloader] Metadata pre-check non-fatal: {e}")
 
-    print(f"[media_downloader] Inspecting YouTube metadata from {url}...")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-            title = info.get("title", "youtube_video")
-            duration = float(info.get("duration", 0.0))
-            safe_base = sanitize_filename(title)
-            safe_filename = os.path.join(output_dir, f"{safe_base}.mp4")
+    safe_base = sanitize_filename(title)
+    safe_filename = os.path.join(output_dir, f"{safe_base}.mp4")
 
-            # Check if an existing file matches exactly or fuzzy in output_dir
-            if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 1024 * 1024:
-                print(f"[media_downloader] File already exists in inputs/: {safe_filename} ({duration:.1f}s) — skipping re-download.")
-                return {
-                    "file_path": safe_filename,
-                    "file_name": os.path.basename(safe_filename),
-                    "title": title,
-                    "duration": duration,
-                    "source": "youtube",
-                    "url": url,
-                }
-            # Also check if any file in output_dir matches the sanitized base
-            if os.path.isdir(output_dir):
-                for f in os.listdir(output_dir):
-                    if f.lower().endswith(".mp4") and (sanitize_filename(f[:-4]) == safe_base or f.startswith(safe_base[:30])):
-                        candidate = os.path.join(output_dir, f)
-                        if os.path.isfile(candidate) and os.path.getsize(candidate) > 1024 * 1024:
-                            print(f"[media_downloader] Found existing downloaded file: {candidate} — skipping re-download.")
-                            return {
-                                "file_path": candidate,
-                                "file_name": f,
-                                "title": title,
-                                "duration": duration,
-                                "source": "youtube",
-                                "url": url,
-                            }
-        except Exception as e:
-            logger.debug(f"[media_downloader] Metadata pre-check non-fatal: {e}")
-
-        print(f"[media_downloader] Downloading YouTube video from {url}...")
-        info = ydl.extract_info(url, download=True)
-        title = info.get("title", "youtube_video")
-        duration = float(info.get("duration", 0.0))
-
-        filename = ydl.prepare_filename(info)
-        # In case merge format renamed to .mp4
-        if not os.path.isfile(filename):
-            base_no_ext = os.path.splitext(filename)[0]
-            if os.path.isfile(f"{base_no_ext}.mp4"):
-                filename = f"{base_no_ext}.mp4"
-
-        print(f"[media_downloader] YouTube download complete: {filename} ({duration:.1f}s)")
-
-        # Ensure downloaded filename is sanitized to avoid space/special character mismatches
-        base_name = os.path.basename(filename)
-        safe_base = sanitize_filename(os.path.splitext(base_name)[0])
-        safe_filename = os.path.join(os.path.dirname(filename), f"{safe_base}.mp4")
-        if filename != safe_filename and os.path.isfile(filename):
-            try:
-                os.replace(filename, safe_filename)
-                filename = safe_filename
-            except Exception as e:
-                logger.warning(f"Could not rename {filename} to {safe_filename}: {e}")
-
+    # ── Step 2: Skip download if file already exists ─────────────────────────
+    if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 1024 * 1024:
+        print(f"[media_downloader] Already downloaded: {safe_filename} ({duration:.1f}s) — skipping.")
         return {
-            "file_path": filename,
-            "file_name": os.path.basename(filename),
+            "file_path": safe_filename,
+            "file_name": os.path.basename(safe_filename),
             "title": title,
-            "duration": duration,
+            "duration": duration or _probe_duration(safe_filename),
             "source": "youtube",
             "url": url,
         }
+
+    # Fuzzy match existing files in output_dir
+    if os.path.isdir(output_dir):
+        for f in os.listdir(output_dir):
+            if f.lower().endswith(".mp4"):
+                f_base = sanitize_filename(os.path.splitext(f)[0])
+                if f_base == safe_base or f.startswith(safe_base[:30]):
+                    candidate = os.path.join(output_dir, f)
+                    if os.path.isfile(candidate) and os.path.getsize(candidate) > 1024 * 1024:
+                        print(f"[media_downloader] Found cached file: {candidate} — skipping re-download.")
+                        return {
+                            "file_path": candidate,
+                            "file_name": f,
+                            "title": title,
+                            "duration": duration or _probe_duration(candidate),
+                            "source": "youtube",
+                            "url": url,
+                        }
+
+    # ── Step 3: Download via yt-dlp CLI subprocess (user's proven approach) ──
+    print(f"[media_downloader] Downloading YouTube video: {url}")
+    cmd = [
+        "yt-dlp",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        "-o", safe_filename,
+        "--no-playlist",
+        url,
+    ]
+
+    result = subprocess.run(cmd, capture_output=False)
+
+    if result.returncode != 0 or not os.path.isfile(safe_filename):
+        # Fallback: try without height constraint (catches age-restricted or geo-locked videos)
+        print("[media_downloader] Primary format failed — retrying with relaxed format...")
+        fallback_cmd = [
+            "yt-dlp",
+            "-f", "best[ext=mp4]/best",
+            "--merge-output-format", "mp4",
+            "-o", safe_filename,
+            "--no-playlist",
+            url,
+        ]
+        result = subprocess.run(fallback_cmd, capture_output=False)
+
+    if not os.path.isfile(safe_filename):
+        raise RuntimeError(
+            f"yt-dlp failed to download '{url}'. "
+            "If you see a bot/cookie error on Kaggle, export your YouTube cookies "
+            "as 'cookies.txt' and place them in the project root."
+        )
+
+    final_duration = duration or _probe_duration(safe_filename)
+    size_mb = os.path.getsize(safe_filename) / (1024 * 1024)
+    print(f"[media_downloader] Download complete: {safe_filename} ({size_mb:.1f} MB, {final_duration:.1f}s)")
+
+    return {
+        "file_path": safe_filename,
+        "file_name": os.path.basename(safe_filename),
+        "title": title,
+        "duration": final_duration,
+        "source": "youtube",
+        "url": url,
+    }
 
 
 def download_gdrive_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, Any]:
