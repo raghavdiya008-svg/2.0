@@ -39,16 +39,13 @@ def _ytdlp_extra_args() -> list:
     Returns extra resilience flags for yt-dlp to bypass bot-detection on cloud VMs
     (Kaggle, Colab, Docker).
 
-    - --cookies cookies.txt  → injected only when cookies.txt exists in the project root.
-      Export your YouTube cookies via the 'Get cookies.txt LOCALLY' browser extension
-      and place the file at the project root to unblock age-restricted / bot-challenged videos.
-    - --extractor-args youtube:player_client=tv,web
-      → Uses YouTube's TV client (innertube) which is far less aggressively bot-checked
-      than the default web client. Falls back to the normal web client automatically.
-    - --no-check-certificates → avoids TLS errors common inside restricted cloud networks.
+    - player_client=android  -> Android client skips YouTube's JS n-challenge entirely.
+      No Node.js or Deno runtime required. Works reliably on restricted cloud VMs.
+    - --cookies cookies.txt  -> injected only when cookies.txt exists in the project root.
+    - --no-check-certificates -> avoids TLS errors in restricted cloud networks.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=tv,web",
+        "--extractor-args", "youtube:player_client=android,tv,web",
         "--no-check-certificates",
     ]
     cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
@@ -100,21 +97,27 @@ def _probe_duration(file_path: str) -> float:
 
 def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, Any]:
     """
-    Downloads a YouTube video via the yt-dlp CLI subprocess (not the Python library).
-    Using the CLI binary bypasses the bot-detection that blocks Python API callers
-    on cloud VMs (Kaggle, Colab, Docker).
+    Downloads a YouTube video using the yt-dlp Python API (primary) with subprocess fallback.
+
+    PRIMARY path: `import yt_dlp` Python API — works on any environment where
+    yt-dlp is pip-installed, regardless of whether the binary is on PATH.
+    This makes it fully compatible with Kaggle, Colab, Docker, and Windows venvs.
+
+    FALLBACK path: subprocess `yt-dlp` binary or `python -m yt_dlp`.
 
     Returns dictionary with file_path, file_name, title, duration.
     Reuses existing file if already downloaded in output_dir.
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Step 1: Probe metadata to check deduplication ────────────────────────
+    # ── Step 1: Probe metadata (non-fatal, used for deduplication only) ───────
     title = "youtube_video"
     duration = 0.0
     try:
         result = subprocess.run(
-            _ytdlp_cmd() + _ytdlp_extra_args() + ["--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url],
+            _ytdlp_cmd() + _ytdlp_extra_args() + [
+                "--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url
+            ],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -127,7 +130,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     safe_base = sanitize_filename(title)
     safe_filename = os.path.join(output_dir, f"{safe_base}.mp4")
 
-    # ── Step 2: Skip download if file already exists ─────────────────────────
+    # ── Step 2: Skip download if file already exists ──────────────────────────
     if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 1024 * 1024:
         print(f"[media_downloader] Already downloaded: {safe_filename} ({duration:.1f}s) — skipping.")
         return {
@@ -157,29 +160,84 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
                             "url": url,
                         }
 
-    # ── Step 3: Download via yt-dlp CLI subprocess (user's proven approach) ──
     print(f"[media_downloader] Downloading YouTube video: {url}")
-    cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
-        "--merge-output-format", "mp4",
-        "-o", safe_filename,
-        "--no-playlist",
-        url,
-    ]
 
-    result = subprocess.run(cmd, capture_output=False)
+    # ── Step 3: PRIMARY — yt-dlp Python API (no binary required) ─────────────
+    # Works wherever `pip install yt-dlp` was run, no binary on PATH needed.
+    _downloaded_ok = False
+    try:
+        import yt_dlp  # noqa: PLC0415
 
-    if result.returncode != 0 or not os.path.isfile(safe_filename):
-        # Fallback: try without height constraint (catches age-restricted or geo-locked videos)
-        print("[media_downloader] Primary format failed — retrying with relaxed format...")
-        fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-            "-f", "best[ext=mp4]/best",
+        cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
+        ydl_opts = {
+            "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            "merge_output_format": "mp4",
+            "outtmpl": safe_filename,
+            "noplaylist": True,
+            "quiet": False,
+            "no_warnings": False,
+            "extractor_args": {"youtube": {"player_client": ["android", "tv", "web"]}},
+            "nocheckcertificate": True,
+        }
+        if os.path.isfile(cookies_path):
+            ydl_opts["cookiefile"] = cookies_path
+            logger.info(f"[media_downloader] Using cookies file: {cookies_path}")
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            if info:
+                title = info.get("title", title) or title
+                duration = float(info.get("duration", duration) or duration)
+                # yt-dlp may sanitize the filename differently than we did
+                resolved = ydl.prepare_filename(info)
+                for ext in (".webm", ".mkv", ".m4a"):
+                    resolved = resolved.replace(ext, ".mp4")
+                if os.path.isfile(resolved) and resolved != safe_filename:
+                    safe_filename = resolved
+
+        # Verify the file exists — yt-dlp sometimes places it with a slightly different name
+        if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
+            for f in os.listdir(output_dir):
+                candidate = os.path.join(output_dir, f)
+                if (f.lower().endswith(".mp4")
+                        and os.path.getsize(candidate) > 1024 * 1024
+                        and sanitize_filename(os.path.splitext(f)[0])[:20] == safe_base[:20]):
+                    safe_filename = candidate
+                    break
+
+        if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0:
+            _downloaded_ok = True
+            print(f"[media_downloader] Python API download complete: {safe_filename}")
+        else:
+            logger.warning("[media_downloader] Python API reported success but output file not found.")
+
+    except ImportError:
+        logger.warning("[media_downloader] yt_dlp not importable — falling back to subprocess.")
+    except Exception as e:
+        logger.warning(f"[media_downloader] yt-dlp Python API error ({e}) — falling back to subprocess.")
+
+    # ── Step 4: FALLBACK — subprocess (yt-dlp binary or python -m yt_dlp) ────
+    if not _downloaded_ok:
+        print("[media_downloader] Trying subprocess fallback...")
+        cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
+            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", safe_filename,
             "--no-playlist",
             url,
         ]
-        result = subprocess.run(fallback_cmd, capture_output=False)
+        result = subprocess.run(cmd, capture_output=False)
+
+        if result.returncode != 0 or not os.path.isfile(safe_filename):
+            print("[media_downloader] Primary format failed — retrying with relaxed format...")
+            fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
+                "-f", "best[ext=mp4]/best",
+                "--merge-output-format", "mp4",
+                "-o", safe_filename,
+                "--no-playlist",
+                url,
+            ]
+            subprocess.run(fallback_cmd, capture_output=False)
 
     if not os.path.isfile(safe_filename):
         raise RuntimeError(
