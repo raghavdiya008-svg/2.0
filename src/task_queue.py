@@ -19,11 +19,41 @@ import logging
 import threading
 import sqlite3
 import json
+import ctypes
 from typing import Callable, Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from contextlib import contextmanager
 
 logger = logging.getLogger("task_queue")
+
+# Monkey-patch numpy ufunc to add __qualname__ dynamically if missing (NumPy < 2.0 on Python 3.10+)
+def _patch_ufunc_qualname():
+    try:
+        import numpy as np
+        if not hasattr(np.ufunc, '__qualname__'):
+            class _MappingProxyStruct(ctypes.Structure):
+                _fields_ = [('ob_refcnt', ctypes.c_ssize_t), ('ob_type', ctypes.c_void_p), ('mapping', ctypes.py_object)]
+            proxy = np.ufunc.__dict__
+            proxy_obj = _MappingProxyStruct.from_address(id(proxy))
+            ctypes.pythonapi.PyDict_SetItem(
+                ctypes.py_object(proxy_obj.mapping),
+                ctypes.py_object('__qualname__'),
+                ctypes.py_object(property(lambda self: getattr(self, '__name__', str(self))))
+            )
+    except Exception as _e:
+        logger.debug(f"[task_queue] ufunc patch notice: {_e}")
+
+_patch_ufunc_qualname()
+
+def _safe_json_dumps(obj: Any) -> str:
+    """Safe json serializer that never crashes on unhandled callable/ufunc/object types."""
+    def _default_serializer(o):
+        if hasattr(o, '__name__'):
+            return o.__name__
+        if hasattr(o, '__dict__'):
+            return o.__dict__
+        return str(o)
+    return json.dumps(obj, default=_default_serializer)
 
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SRC_DIR, ".."))
@@ -84,7 +114,7 @@ class RenderQueueManager:
             if payload is not None:
                 conn.execute(
                     "UPDATE render_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP, payload_json = ? WHERE job_id = ?",
-                    (status, json.dumps(payload), job_id)
+                    (status, _safe_json_dumps(payload), job_id)
                 )
             elif error_message is not None:
                 conn.execute(
@@ -208,11 +238,11 @@ class RenderQueueManager:
         self.queue.put(job)
         logger.info(f"[task_queue] Enqueued job: {jid} (Queue depth: {self.queue.qsize()})")
         
-        payload_data = {"kwargs": clean_kwargs, "metadata": {k: (v.__name__ if callable(v) else v) for k, v in meta.items()}}
+        payload_data = {"kwargs": clean_kwargs, "metadata": {k: (v.__name__ if callable(v) else str(v) if not isinstance(v, (str, int, float, bool, list, dict)) else v) for k, v in meta.items()}}
         with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO render_jobs (job_id, status, payload_json, updated_at) VALUES (?, 'queued', ?, CURRENT_TIMESTAMP)",
-                (jid, json.dumps(payload_data))
+                (jid, _safe_json_dumps(payload_data))
             )
             
         return job

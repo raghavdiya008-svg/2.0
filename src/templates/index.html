@@ -2430,12 +2430,29 @@ Or Plain Text:
             const [isPlaying, setIsPlaying] = useState(false);
             const [currentTime, setCurrentTime] = useState(clip?.start || 0);
 
+            // View mode: 'phone' (9:16 Shorts Mockup) or 'source' (16:9 Raw Source)
+            const [previewMode, setPreviewMode] = useState('phone');
+
+            // Interactive Title and Margin states
+            const [titleY, setTitleY] = useState(clip?.title_y || 130);
+            const [showTitle, setShowTitle] = useState(!clip?.delete_title);
+            const isDual = Boolean(shots && shots.some(s => s.type === 'split_stack'));
+            const [marginV, setMarginV] = useState(clip?.margin_v || (isDual ? 960 : 580));
+
+            useEffect(() => {
+                if (clip) {
+                    if (clip.title_y !== undefined) setTitleY(clip.title_y);
+                    if (clip.delete_title !== undefined) setShowTitle(!clip.delete_title);
+                    if (clip.margin_v !== undefined) setMarginV(clip.margin_v);
+                }
+            }, [clip]);
+
             useEffect(() => {
                 if (videoRef.current && clip) {
                     videoRef.current.currentTime = clip.start;
                     setCurrentTime(clip.start);
                 }
-            }, [clip?.start]);
+            }, [clip?.start, previewMode]);
 
             const handleTimeUpdate = () => {
                 if (!videoRef.current) return;
@@ -2547,6 +2564,13 @@ Or Plain Text:
                                         <video
                                             ref={videoRef}
                                             src={`/inputs/${encodeURIComponent(videoName)}`}
+                                            preload="auto"
+                                            playsInline
+                                            onLoadedMetadata={() => {
+                                                if (videoRef.current && clip) {
+                                                    videoRef.current.currentTime = clip.start;
+                                                }
+                                            }}
                                             onTimeUpdate={handleTimeUpdate}
                                             onEnded={() => setIsPlaying(false)}
                                             className="absolute inset-0 w-full h-full object-cover"
@@ -2587,6 +2611,13 @@ Or Plain Text:
                                         <video
                                             ref={videoRef}
                                             src={`/inputs/${encodeURIComponent(videoName)}`}
+                                            preload="auto"
+                                            playsInline
+                                            onLoadedMetadata={() => {
+                                                if (videoRef.current && clip) {
+                                                    videoRef.current.currentTime = clip.start;
+                                                }
+                                            }}
                                             onTimeUpdate={handleTimeUpdate}
                                             onEnded={() => setIsPlaying(false)}
                                             className="w-full h-full object-contain"

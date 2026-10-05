@@ -15,6 +15,7 @@ import tempfile
 import cv2
 import unicodedata
 import subprocess
+import ctypes
 from typing import Optional, List, Dict, Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -24,6 +25,35 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger("server")
+
+# Inoculate runtime against AttributeError: 'numpy.ufunc' object has no attribute '__qualname__'
+def _patch_ufunc_qualname():
+    try:
+        import numpy as np
+        if not hasattr(np.ufunc, '__qualname__'):
+            class _MappingProxyStruct(ctypes.Structure):
+                _fields_ = [('ob_refcnt', ctypes.c_ssize_t), ('ob_type', ctypes.c_void_p), ('mapping', ctypes.py_object)]
+            proxy = np.ufunc.__dict__
+            proxy_obj = _MappingProxyStruct.from_address(id(proxy))
+            ctypes.pythonapi.PyDict_SetItem(
+                ctypes.py_object(proxy_obj.mapping),
+                ctypes.py_object('__qualname__'),
+                ctypes.py_object(property(lambda self: getattr(self, '__name__', str(self))))
+            )
+    except Exception as _e:
+        logger.debug(f"[server] ufunc patch notice: {_e}")
+
+_patch_ufunc_qualname()
+
+def _safe_json_dumps(obj: Any) -> str:
+    """Safe json serializer that never crashes on unhandled callable/ufunc/object types."""
+    def _default_serializer(o):
+        if hasattr(o, '__name__'):
+            return o.__name__
+        if hasattr(o, '__dict__'):
+            return o.__dict__
+        return str(o)
+    return json.dumps(obj, default=_default_serializer)
 
 # Ensure src path is in sys.path
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -138,7 +168,7 @@ def _persist_batch_to_db(batch_id: str, data: dict):
         with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO server_batches (batch_id, status, data_json, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                (batch_id, str(data.get("status", "processing")), json.dumps(data))
+                (batch_id, str(data.get("status", "processing")), _safe_json_dumps(data))
             )
     except Exception as e:
         logger.debug(f"[server] Batch persist non-fatal: {e}")
@@ -150,7 +180,7 @@ def _persist_progress_to_db(process_id: str, data: dict):
         with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO server_progress (process_id, stage, progress_pct, data_json, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (process_id, str(data.get("stage", "general")), int(data.get("progress_pct", 0)), json.dumps(data))
+                (process_id, str(data.get("stage", "general")), int(data.get("progress_pct", 0)), _safe_json_dumps(data))
             )
     except Exception as e:
         logger.debug(f"[server] Progress persist non-fatal: {e}")
