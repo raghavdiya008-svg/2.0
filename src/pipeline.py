@@ -400,6 +400,15 @@ def run_pipeline(
 
         _evict_vram("Phase 1")
 
+        # ── Aggressive Disk Freeing: Delete raw uncompressed WAV after ASR & VAD ──
+        if os.path.isfile(full_wav_path):
+            try:
+                wav_mb = os.path.getsize(full_wav_path) / (1024 * 1024)
+                os.remove(full_wav_path)
+                print(f"[pipeline] Purged raw full_audio.wav ({wav_mb:.1f} MB freed).")
+            except Exception as e:
+                logger.debug(f"Failed to remove temporary full_audio.wav: {e}")
+
         # ====================================================================
         # PHASE 2: Global Curation
         # ====================================================================
@@ -636,6 +645,20 @@ def run_pipeline(
                     ass_path=ass_path,
                     emojis=emoji_overlays,
                 )
+
+            # Purge intermediate slice files immediately after rendering this reel
+            for tmp_f in [
+                active_slice_path,
+                slice_paths.get(idx),
+                os.path.join(temp_dir, f"clean_slice_{idx}.mp4"),
+                os.path.join(temp_dir, f"slice_{idx}.mp4"),
+                slice_ass_path,
+            ]:
+                if tmp_f and os.path.isfile(tmp_f) and tmp_f != input_video_path and tmp_f != original_input_path:
+                    try:
+                        os.remove(tmp_f)
+                    except OSError:
+                        pass
 
             clip_speakers = [
                 s for s in speaker_segments

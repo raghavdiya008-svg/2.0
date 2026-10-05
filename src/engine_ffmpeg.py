@@ -22,13 +22,18 @@ import functools
 
 @functools.lru_cache(maxsize=1)
 def get_cfr_args() -> list:
+    """
+    Returns FFmpeg arguments enforcing Constant Frame Rate (CFR) at 30fps.
+    Locks variable frame rate (VFR) inputs (common in YouTube and phone cameras)
+    into an exact 30fps timeline to completely prevent lip-sync drift and subtitle misalignment.
+    """
     try:
         res = subprocess.run(["ffmpeg", "-fps_mode", "cfr", "-version"], capture_output=True, text=True)
         if res.returncode == 0:
-            return ["-fps_mode", "cfr"]
+            return ["-fps_mode", "cfr", "-r", "30"]
     except Exception:
         pass
-    return ["-vsync", "cfr"]
+    return ["-vsync", "cfr", "-r", "30"]
 
 _NVENC_FORCE_DISABLED = False
 

@@ -30,7 +30,7 @@ logger = logging.getLogger("curation_engine")
 # ---------------------------------------------------------------------------
 MIN_CLIP_DURATION_SEC = 30.0
 MAX_CLIP_DURATION_SEC = 50.0
-OLLAMA_MODEL       = "llama3.1:8b"
+OLLAMA_MODEL       = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 OLLAMA_HOST        = "http://localhost:11434"
 OLLAMA_PORT        = 11434
 CHUNK_MINUTES      = 12        # 12-minute sliding window for long-video chunking
@@ -74,6 +74,8 @@ def validate_and_format_cuts(raw_cuts: list, total_duration: float, min_duration
             "hook_sentence":  sentence,
             "hook_text":      sentence,
             "reason":         str(item.get("reason", "")),
+            "curation_method": str(item.get("curation_method", "llm_curated")),
+            "is_fallback":    bool(item.get("is_fallback", False)),
         })
     # NMS Deduplication: Limit overlap to 15%, prioritize highest score
     # First, sort by virality score descending
@@ -1121,6 +1123,9 @@ def get_viral_cuts(
                         if v_tag:
                             cut["reason"] = f"{cut.get('reason', '')} {v_tag}".strip()
 
+                    for c in llm_cuts:
+                        c["curation_method"] = "llm_curated"
+                        c["is_fallback"] = False
                     llm_cuts = validate_and_format_cuts(llm_cuts, total_duration)
 
                 logger.info("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")
@@ -1166,6 +1171,8 @@ def get_viral_cuts(
                     "virality_score": max(75, 95 - (len(reels) * 2)),
                     "hook_sentence": f"Action Hook #{len(reels) + 1}",
                     "reason": f"Blind fallback: Audio energy spike detected at {spike_t}s (no transcript analysis).",
+                    "curation_method": "audio_rms_fallback",
+                    "is_fallback": True,
                 })
                 
                 if len(reels) >= target_clips:
@@ -1189,6 +1196,8 @@ def get_viral_cuts(
                 "virality_score": max(75, 95 - (i % 20)),
                 "hook_sentence": f"Action Hook #{i + 1}",
                 "reason": f"Blind fallback: Even-split interval {i + 1} (no transcript or audio signal).",
+                "curation_method": "even_split_fallback",
+                "is_fallback": True,
             })
             
     return validate_and_format_cuts(reels, total_duration)
