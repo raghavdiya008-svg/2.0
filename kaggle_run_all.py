@@ -64,18 +64,21 @@ def setup_kaggle_environment():
         except Exception as e:
             print(f"Failed to update system packages: {e}")
             
-        # ── Ollama Local Runtime Setup (Strictly 100% Local GPU Model) ──
-        print("\nEnsuring local Ollama runtime is available on Kaggle/Colab GPU...")
-        try:
-            subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True, check=True)
-            # Launch Ollama background daemon in Docker/Kaggle environment
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(3)
-            default_model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-            print(f"Pre-pulling Ollama model '{default_model}'...")
-            subprocess.run(["ollama", "pull", default_model], check=False)
-        except Exception as e:
-            print(f"Ollama local runtime setup note: {e}")
+        # ── Ollama Local Runtime Setup (Only if not using Gemini workflow or if explicitly requested) ──
+        skip_ollama = os.environ.get("SKIP_OLLAMA", "").lower() in ["1", "true", "yes"] or "--no-ollama" in sys.argv
+        if not skip_ollama:
+            print("\nEnsuring local Ollama runtime is available on Kaggle/Colab GPU...")
+            try:
+                subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True, check=True)
+                subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(3)
+                default_model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+                print(f"Pre-pulling Ollama model '{default_model}'...")
+                subprocess.run(["ollama", "pull", default_model], check=False)
+            except Exception as e:
+                print(f"Ollama local runtime setup note: {e}")
+        else:
+            print("\nSkipping Ollama installation (Gemini / External workflow active).")
 
         print("\nInstalling Kaggle GPU dependencies...")
         for pkg in dependencies:
@@ -117,6 +120,7 @@ def main():
     parser.add_argument("--ui", "--serve", action="store_true", help="Launch the interactive Web UI Studio with Cloudflare tunnel")
     parser.add_argument("--port", type=int, default=5000, help="Port for the Web Studio")
     parser.add_argument("--no-tunnel", action="store_true", help="Disable public Cloudflare tunnel")
+    parser.add_argument("--no-ollama", action="store_true", help="Skip Ollama download (use Gemini timestamps workflow)")
     args, _ = parser.parse_known_args()
 
     setup_kaggle_environment()
