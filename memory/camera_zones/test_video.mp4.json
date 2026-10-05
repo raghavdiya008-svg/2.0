@@ -16,6 +16,7 @@
       "is_wide": false,
       "is_facecam": false,
       "is_gameplay": false,
+      "is_screencast": false,
       "color": "#3b82f6"
     },
     {
@@ -29,6 +30,7 @@
       "is_wide": false,
       "is_facecam": false,
       "is_gameplay": false,
+      "is_screencast": false,
       "color": "#10b981"
     }
   ]
