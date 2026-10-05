@@ -80,13 +80,27 @@ def setup_kaggle_environment():
         else:
             print("\nSkipping Ollama installation (Gemini / External workflow active).")
 
-        print("\nInstalling Kaggle GPU dependencies...")
+        print("\nChecking Kaggle GPU dependencies...")
+        import_map = {
+            "whisperx": "whisperx",
+            "faster-whisper": "faster_whisper",
+            "ultralytics": "ultralytics",
+            "mediapipe": "mediapipe",
+            "soundfile": "soundfile",
+            "python-dotenv": "dotenv",
+            "pyannote.audio": "pyannote.audio"
+        }
         for pkg in dependencies:
+            imp_name = import_map.get(pkg, pkg)
             try:
-                print(f"Installing {pkg}...")
-                subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--no-warn-script-location", "-q"], check=True)
-            except Exception as e:
-                print(f"Failed to install {pkg}: {e}")
+                __import__(imp_name)
+                print(f"  ✓ {pkg} already installed.")
+            except ImportError:
+                try:
+                    print(f"  ⬇ Installing {pkg}...")
+                    subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--no-warn-script-location", "-q"], check=True)
+                except Exception as e:
+                    print(f"Failed to install {pkg}: {e}")
     else:
         print("\nLocal system run detected. Skipping heavy Kaggle package installations.")
         print("Using local mock / CPU fallbacks in source code.")
