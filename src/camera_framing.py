@@ -34,8 +34,8 @@ def _sanitize_filename(name: str) -> str:
 
 @dataclass
 class CameraZone:
-    id: str                                  # e.g. "zone_host", "zone_guest", "zone_wide"
-    label: str                               # e.g. "Host (Left)", "Guest (Right)"
+    id: str                                  # e.g. "zone_host", "zone_guest", "zone_wide", "zone_screencast"
+    label: str                               # e.g. "Host (Left)", "Guest (Right)", "Screencast"
     x: int                                   # X offset in source video
     y: int                                   # Y offset in source video
     width: int                               # Bounding box width
@@ -44,6 +44,7 @@ class CameraZone:
     is_wide: bool = False
     is_facecam: bool = False
     is_gameplay: bool = False
+    is_screencast: bool = False
     color: str = "#3b82f6"                   # Hex color for UI canvas rendering
 
     def __post_init__(self):
@@ -52,6 +53,14 @@ class CameraZone:
         self.y = max(0, int(round(self.y)))
         self.width = max(2, int(round(self.width / 2.0)) * 2)
         self.height = max(2, int(round(self.height / 2.0)) * 2)
+
+    def clamp(self, max_w: int = 1920, max_h: int = 1080):
+        self.x = max(0, min(max_w - 40, self.x))
+        self.y = max(0, min(max_h - 40, self.y))
+        self.width = max(40, min(max_w - self.x, self.width))
+        self.height = max(40, min(max_h - self.y, self.height))
+        self.width = (self.width // 2) * 2
+        self.height = (self.height // 2) * 2
 
     @property
     def aspect_ratio(self) -> float:
@@ -73,6 +82,7 @@ class CameraZone:
             is_wide=bool(data.get("is_wide", False)),
             is_facecam=bool(data.get("is_facecam", False)),
             is_gameplay=bool(data.get("is_gameplay", False)),
+            is_screencast=bool(data.get("is_screencast", False)),
             color=str(data.get("color", "#3b82f6")),
         )
 
@@ -146,6 +156,12 @@ class CameraFramingConfig:
     def get_wide_zone(self) -> Optional[CameraZone]:
         for z in self.zones:
             if z.is_wide or "wide" in z.id.lower() or "wide" in z.label.lower():
+                return z
+        return None
+
+    def get_screencast_zone(self) -> Optional[CameraZone]:
+        for z in self.zones:
+            if z.is_screencast or "screen" in z.id.lower() or "screen" in z.label.lower() or "slide" in z.label.lower():
                 return z
         return None
 

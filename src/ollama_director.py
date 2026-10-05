@@ -383,13 +383,25 @@ Respond strictly with valid JSON."""
         host_zone = self.config.get_host_zone() or CameraZone("zone_host", "Host", 0, 0, 960, 1080)
         guest_zone = self.config.get_guest_zone() or CameraZone("zone_guest", "Guest", 960, 0, 960, 1080)
         wide_zone = self.config.get_wide_zone() or CameraZone("zone_wide", "Wide", 0, 0, self.config.source_width, self.config.source_height, is_wide=True)
+        screencast_zone = self.config.get_screencast_zone()
 
         resolved = []
         for shot in cuts:
             shot_type = shot.get("type", "single")
             cam_id = shot.get("camera", "zone_host")
 
-            if shot_type == "split_stack" or cam_id == "split":
+            # Screencast Stack layout: Facecam Top, Screen Content Bottom
+            if (self.config.mode == "screencast" or screencast_zone is not None) and (shot_type == "screencast_stack" or cam_id == "screencast"):
+                face_zone = host_zone if not host_zone.is_screencast else guest_zone
+                resolved.append({
+                    "start": round(shot["start"], 2),
+                    "end": round(shot["end"], 2),
+                    "type": "split_stack",
+                    "camera": "screencast_stack",
+                    "top_zone": face_zone.to_dict(),
+                    "bot_zone": (screencast_zone or wide_zone).to_dict(),
+                })
+            elif shot_type == "split_stack" or cam_id == "split":
                 resolved.append({
                     "start": round(shot["start"], 2),
                     "end": round(shot["end"], 2),
