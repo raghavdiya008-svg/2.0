@@ -137,6 +137,9 @@ def main():
     parser.add_argument("--no-ollama", action="store_true", help="Skip Ollama download (use Gemini timestamps workflow)")
     args, _ = parser.parse_known_args()
 
+    if args.no_ollama:
+        os.environ["SKIP_OLLAMA"] = "1"
+
     setup_kaggle_environment()
     
     # Add src to python path

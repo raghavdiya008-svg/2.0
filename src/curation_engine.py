@@ -749,13 +749,18 @@ def score_transcript_with_llm(
         logger.info("[curation] No words supplied; skipping LLM scoring.")
         return []
 
+    # If user selected --no-ollama or SKIP_OLLAMA (Gemini / External timestamp workflow), skip Ollama immediately
+    if os.environ.get("SKIP_OLLAMA", "").lower() in ["1", "true", "yes"] or "--no-ollama" in sys.argv:
+        logger.info("[curation] SKIP_OLLAMA active. Bypassing local LLM scoring for fast rule-based curation.")
+        return []
+
     # Start Ollama server
     server_ok = _start_ollama_server()
     if not server_ok:
         logger.warning("[curation] Ollama unavailable — using even-split fallback.")
         return []
 
-    # Ensure model is available
+    # Ensure model is available (fast 2s timeout check if server is responsive)
     model_ok = _ensure_model_pulled(model)
     if not model_ok:
         logger.warning("[curation] Model pull failed — using even-split fallback.")
