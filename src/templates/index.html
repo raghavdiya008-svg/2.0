@@ -105,6 +105,15 @@
             const [isRenderingBatch, setIsRenderingBatch] = useState(false);
             const [renderSpeed, setRenderSpeed] = useState(1.12);
 
+            // Virtual TV Director Preview & Reviewer State
+            const [previewModalOpen, setPreviewModalOpen] = useState(false);
+            const [previewClip, setPreviewClip] = useState(null);
+            const [previewClipIndex, setPreviewClipIndex] = useState(null);
+            const [previewShots, setPreviewShots] = useState([]);
+            const [isLoadingDirector, setIsLoadingDirector] = useState(false);
+            const [renderedClipResult, setRenderedClipResult] = useState(null);
+            const [isRenderingSingle, setIsRenderingSingle] = useState(false);
+
             // Fetch available assets and check dependencies on mount
             useEffect(() => {
                 fetchAssets();
@@ -441,6 +450,106 @@
                 }
             };
 
+            const openDirectorPreview = async (clip, index) => {
+                setPreviewClip({ ...clip });
+                setPreviewClipIndex(index);
+                setPreviewModalOpen(true);
+                setRenderedClipResult(null);
+                setIsLoadingDirector(true);
+                try {
+                    const words = clip.words || (ingestData?.transcript?.words || []);
+                    const res = await fetch('/api/director/plan', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            file_name: selectedVideo,
+                            start: clip.start,
+                            end: clip.end,
+                            words: words,
+                            use_ollama: true
+                        })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        setPreviewShots(data.shots || []);
+                    }
+                } catch (e) {
+                    console.error("Director plan fetch error:", e);
+                } finally {
+                    setIsLoadingDirector(false);
+                }
+            };
+
+            const handleUpdatePreviewClip = (field, value) => {
+                setPreviewClip(prev => {
+                    if (!prev) return null;
+                    const updated = { ...prev, [field]: value };
+                    if (previewClipIndex !== null) {
+                        setCuratedClips(clips => {
+                            const copy = [...clips];
+                            copy[previewClipIndex] = { ...copy[previewClipIndex], [field]: value };
+                            return copy;
+                        });
+                    }
+                    return updated;
+                });
+            };
+
+            const handleRenderApprovedClip = async () => {
+                if (!previewClip || !selectedVideo) return;
+                setIsRenderingSingle(true);
+                setRenderedClipResult(null);
+                try {
+                    const words = previewClip.words || (ingestData?.transcript?.words || []);
+                    const payload = {
+                        video: selectedVideo,
+                        start: previewClip.start,
+                        end: previewClip.end,
+                        headline_text: previewClip.hook_sentence || previewClip.title || '',
+                        speed: renderSpeed,
+                        speed_factor: renderSpeed,
+                        trajectory: {
+                            layout: 'director_multizone',
+                            shot_timeline: previewShots
+                        },
+                        words: words
+                    };
+                    const res = await fetch('/render', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        const jobId = data.job_id;
+                        const pollInterval = setInterval(async () => {
+                            try {
+                                const sRes = await fetch(`/api/status/${jobId}`);
+                                if (sRes.ok) {
+                                    const sData = await sRes.json();
+                                    if (sData.status === 'completed') {
+                                        clearInterval(pollInterval);
+                                        setIsRenderingSingle(false);
+                                        setRenderedClipResult(sData);
+                                    } else if (sData.status === 'failed') {
+                                        clearInterval(pollInterval);
+                                        setIsRenderingSingle(false);
+                                        alert(`Render failed: ${sData.error || 'Unknown error'}`);
+                                    }
+                                }
+                            } catch (pollErr) {
+                                console.error("Poll error:", pollErr);
+                            }
+                        }, 1000);
+                    } else {
+                        setIsRenderingSingle(false);
+                    }
+                } catch (e) {
+                    setIsRenderingSingle(false);
+                    console.error("Render approved clip error:", e);
+                }
+            };
+
             return (
                 <div className="min-h-screen w-full flex flex-col bg-[#090d16] text-white">
                     {/* Header Navbar */}
@@ -481,7 +590,7 @@
                                 }`}
                             >
                                 <Icon name="crop" className="w-3.5 h-3.5" />
-                                Canvas Editor
+                                Camera Framing Studio
                             </button>
                         </div>
 
@@ -544,16 +653,35 @@
                                 onCheckDeps={() => checkDependencies(false)}
                                 onInstallDeps={() => checkDependencies(true)}
                                 isInstallingDeps={isInstallingDeps}
+                                onOpenDirectorPreview={openDirectorPreview}
                             />
                         ) : (
-                            <CanvasRebranderTabContent
+                            <CameraFramingStudioTabContent
                                 videos={videos}
-                                logos={logos}
-                                selectedLogo={selectedLogo}
-                                setSelectedLogo={setSelectedLogo}
+                                selectedVideo={selectedVideo}
+                                setSelectedVideo={setSelectedVideo}
                             />
                         )}
                     </main>
+
+                    {/* Virtual TV Director Preview Modal */}
+                    {previewModalOpen && previewClip && (
+                        <DirectorPreviewModal
+                            isOpen={previewModalOpen}
+                            onClose={() => setPreviewModalOpen(false)}
+                            clip={previewClip}
+                            clipIndex={previewClipIndex}
+                            videoName={selectedVideo}
+                            shots={previewShots}
+                            isLoadingDirector={isLoadingDirector}
+                            onUpdateClipField={handleUpdatePreviewClip}
+                            renderSpeed={renderSpeed}
+                            setRenderSpeed={setRenderSpeed}
+                            onRenderApproved={handleRenderApprovedClip}
+                            isRenderingSingle={isRenderingSingle}
+                            renderedClipResult={renderedClipResult}
+                        />
+                    )}
                 </div>
             );
         }
@@ -572,7 +700,8 @@
             targetClipsCount, lowYieldWarning, yieldMessage,
             renderSpeed, setRenderSpeed,
             handleStartBatchRender, isRenderingBatch, batchStatus, batchId,
-            depsStatus, onCheckDeps, onInstallDeps, isInstallingDeps
+            depsStatus, onCheckDeps, onInstallDeps, isInstallingDeps,
+            onOpenDirectorPreview
         }) {
             const consoleBottomRef = useRef(null);
 
@@ -883,8 +1012,18 @@
                                             </div>
 
                                             <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
-                                                <span>9:16 Vertical Video</span>
-                                                <span className="text-blue-400 font-medium">Kinetic Subtitles ASS</span>
+                                                <span className="text-slate-400 font-mono text-[10px]">9:16 Kinetic Reel</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (onOpenDirectorPreview) onOpenDirectorPreview(clip, index);
+                                                    }}
+                                                    className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+                                                >
+                                                    <Icon name="video" className="w-3.5 h-3.5 text-blue-400" />
+                                                    Director Preview & Review
+                                                </button>
                                             </div>
                                         </div>
                                     );
@@ -1020,72 +1159,1235 @@
         }
 
         // -------------------------------------------------------------------
-        // Canvas Rebrander Tab Component (Fabric.js Manual Studio)
+        // Human-in-the-Loop Camera Zones Studio Component
         // -------------------------------------------------------------------
-        function CanvasRebranderTabContent({ videos, logos, selectedLogo, setSelectedLogo }) {
-            const canvasRef = useRef(null);
-            const [activeVideo, setActiveVideo] = useState(videos.length > 0 ? videos[0] : '');
+        function CameraFramingStudioTabContent({ videos, selectedVideo, setSelectedVideo }) {
+            const [activeVideo, setActiveVideo] = useState(selectedVideo || (videos.length > 0 ? videos[0] : ''));
+            const [zones, setZones] = useState([]);
+            const [mode, setMode] = useState('podcast');
+            const [splitPreference, setSplitPreference] = useState('split_stack');
+            const [selectedZoneId, setSelectedZoneId] = useState(null);
+            const [isDetecting, setIsDetecting] = useState(false);
+            const [isSaving, setIsSaving] = useState(false);
+            const [toastMessage, setToastMessage] = useState(null);
+
+            // Pro Video Playback & Scrubbing State
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [currentTime, setCurrentTime] = useState(0);
+            const [duration, setDuration] = useState(0);
+            const [showLivePreview, setShowLivePreview] = useState(true);
+            const videoRef = useRef(null);
+            const svgRef = useRef(null);
+
+            // Interactive Drag-to-Select Tool State
+            // 'select': move/resize existing | 'draw': drag on video to create new box
+            const [activeTool, setActiveTool] = useState('select');
+            const [dragAction, setDragAction] = useState(null);
+
+            useEffect(() => {
+                if (!activeVideo) return;
+                fetchZones(activeVideo);
+            }, [activeVideo]);
+
+            const showToast = (msg) => {
+                setToastMessage(msg);
+                setTimeout(() => setToastMessage(null), 3500);
+            };
+
+            const fetchZones = async (vName) => {
+                try {
+                    const res = await fetch(`/api/camera_zones/${encodeURIComponent(vName)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setZones(data.zones || []);
+                        setMode(data.mode || 'podcast');
+                        setSplitPreference(data.split_preference || 'split_stack');
+                        if (data.zones && data.zones.length > 0) {
+                            setSelectedZoneId(data.zones[0].id);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to load camera zones:", e);
+                }
+            };
+
+            const handleAutoDetect = async () => {
+                if (!activeVideo) return;
+                setIsDetecting(true);
+                try {
+                    const res = await fetch('/api/camera_zones/suggest', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ file_name: activeVideo })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        setZones(data.zones || []);
+                        setMode(data.mode || 'podcast');
+                        setSplitPreference(data.split_preference || 'split_stack');
+                        if (data.zones && data.zones.length > 0) {
+                            setSelectedZoneId(data.zones[0].id);
+                        }
+                        showToast("Auto-detected camera zones successfully!");
+                    }
+                } catch (e) {
+                    console.error("Auto detect error:", e);
+                } finally {
+                    setIsDetecting(false);
+                }
+            };
+
+            const handleSave = async () => {
+                if (!activeVideo) return;
+                setIsSaving(true);
+                try {
+                    const res = await fetch('/api/camera_zones/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            file_name: activeVideo,
+                            source_width: 1920,
+                            source_height: 1080,
+                            mode: mode,
+                            split_preference: splitPreference,
+                            zones: zones
+                        })
+                    });
+                    if (res.ok) {
+                        showToast("Camera zones saved to vault successfully!");
+                    }
+                } catch (e) {
+                    console.error("Save zones error:", e);
+                } finally {
+                    setIsSaving(false);
+                }
+            };
+
+            const updateZone = (id, field, value) => {
+                setZones(prev => prev.map(z => {
+                    if (z.id !== id) return z;
+                    let val = value;
+                    if (field === 'width' || field === 'height') {
+                        val = Math.max(120, parseInt(value) || 120);
+                        val = Math.round(val / 2) * 2;
+                    } else if (field === 'x' || field === 'y') {
+                        val = Math.max(0, parseInt(value) || 0);
+                        val = Math.round(val / 2) * 2;
+                    }
+                    return { ...z, [field]: val };
+                }));
+            };
+
+            const deleteZone = (id) => {
+                setZones(prev => prev.filter(z => z.id !== id));
+                if (selectedZoneId === id) setSelectedZoneId(null);
+            };
+
+            // Video Playback Handlers
+            const togglePlay = () => {
+                if (!videoRef.current) return;
+                if (isPlaying) {
+                    videoRef.current.pause();
+                    setIsPlaying(false);
+                } else {
+                    videoRef.current.play().catch(e => console.warn(e));
+                    setIsPlaying(true);
+                }
+            };
+
+            const handleTimeUpdate = () => {
+                if (!videoRef.current) return;
+                setCurrentTime(videoRef.current.currentTime);
+            };
+
+            const handleLoadedMetadata = () => {
+                if (!videoRef.current) return;
+                setDuration(videoRef.current.duration || 0);
+            };
+
+            const seekTo = (sec) => {
+                if (!videoRef.current) return;
+                videoRef.current.currentTime = sec;
+                setCurrentTime(sec);
+            };
+
+            // Coordinate conversion from browser screen mouse to 1920x1080 SVG viewBox
+            const getSvgCoords = (e) => {
+                if (!svgRef.current) return { x: 0, y: 0 };
+                const rect = svgRef.current.getBoundingClientRect();
+                const scaleX = 1920 / rect.width;
+                const scaleY = 1080 / rect.height;
+                return {
+                    x: Math.max(0, Math.min(1920, (e.clientX - rect.left) * scaleX)),
+                    y: Math.max(0, Math.min(1080, (e.clientY - rect.top) * scaleY))
+                };
+            };
+
+            const handleSvgMouseDown = (e) => {
+                if (activeTool === 'draw') {
+                    const coords = getSvgCoords(e);
+                    const newId = `zone_custom_${Date.now().toString().slice(-4)}`;
+                    const newZ = {
+                        id: newId,
+                        label: `Zone ${zones.length + 1}`,
+                        x: Math.round(coords.x / 2) * 2,
+                        y: Math.round(coords.y / 2) * 2,
+                        width: 10,
+                        height: 10,
+                        speaker_label: null,
+                        color: '#3b82f6'
+                    };
+                    setZones(prev => [...prev, newZ]);
+                    setSelectedZoneId(newId);
+                    setDragAction({
+                        type: 'draw',
+                        zoneId: newId,
+                        startX: coords.x,
+                        startY: coords.y
+                    });
+                } else if (activeTool === 'select' && e.target === svgRef.current) {
+                    setSelectedZoneId(null);
+                }
+            };
+
+            const handleZoneMouseDown = (e, zone) => {
+                if (activeTool === 'draw') return;
+                e.stopPropagation();
+                setSelectedZoneId(zone.id);
+                const coords = getSvgCoords(e);
+                setDragAction({
+                    type: 'move',
+                    zoneId: zone.id,
+                    startX: coords.x,
+                    startY: coords.y,
+                    origX: zone.x,
+                    origY: zone.y
+                });
+            };
+
+            const handleHandleMouseDown = (e, zone, handlePos) => {
+                e.stopPropagation();
+                const coords = getSvgCoords(e);
+                setDragAction({
+                    type: 'resize',
+                    zoneId: zone.id,
+                    handlePos: handlePos,
+                    startX: coords.x,
+                    startY: coords.y,
+                    origX: zone.x,
+                    origY: zone.y,
+                    origW: zone.width,
+                    origH: zone.height
+                });
+            };
+
+            const handleSvgMouseMove = (e) => {
+                if (!dragAction) return;
+                const coords = getSvgCoords(e);
+
+                if (dragAction.type === 'draw') {
+                    const minX = Math.min(dragAction.startX, coords.x);
+                    const minY = Math.min(dragAction.startY, coords.y);
+                    const w = Math.max(40, Math.abs(coords.x - dragAction.startX));
+                    const h = Math.max(40, Math.abs(coords.y - dragAction.startY));
+
+                    setZones(prev => prev.map(z => z.id === dragAction.zoneId ? {
+                        ...z,
+                        x: Math.round(minX / 2) * 2,
+                        y: Math.round(minY / 2) * 2,
+                        width: Math.round(w / 2) * 2,
+                        height: Math.round(h / 2) * 2
+                    } : z));
+                } else if (dragAction.type === 'move') {
+                    const dx = coords.x - dragAction.startX;
+                    const dy = coords.y - dragAction.startY;
+                    const z = zones.find(item => item.id === dragAction.zoneId);
+                    if (!z) return;
+
+                    const newX = Math.max(0, Math.min(1920 - z.width, dragAction.origX + dx));
+                    const newY = Math.max(0, Math.min(1080 - z.height, dragAction.origY + dy));
+
+                    setZones(prev => prev.map(item => item.id === dragAction.zoneId ? {
+                        ...item,
+                        x: Math.round(newX / 2) * 2,
+                        y: Math.round(newY / 2) * 2
+                    } : item));
+                } else if (dragAction.type === 'resize') {
+                    const dx = coords.x - dragAction.startX;
+                    const dy = coords.y - dragAction.startY;
+                    const { origX, origY, origW, origH, handlePos } = dragAction;
+
+                    let newX = origX;
+                    let newY = origY;
+                    let newW = origW;
+                    let newH = origH;
+
+                    if (handlePos === 'br') {
+                        newW = Math.max(100, Math.min(1920 - origX, origW + dx));
+                        newH = Math.max(100, Math.min(1080 - origY, origH + dy));
+                    } else if (handlePos === 'bl') {
+                        const rightEdge = origX + origW;
+                        newX = Math.max(0, Math.min(rightEdge - 100, origX + dx));
+                        newW = rightEdge - newX;
+                        newH = Math.max(100, Math.min(1080 - origY, origH + dy));
+                    } else if (handlePos === 'tr') {
+                        const bottomEdge = origY + origH;
+                        newY = Math.max(0, Math.min(bottomEdge - 100, origY + dy));
+                        newH = bottomEdge - newY;
+                        newW = Math.max(100, Math.min(1920 - origX, origW + dx));
+                    } else if (handlePos === 'tl') {
+                        const rightEdge = origX + origW;
+                        const bottomEdge = origY + origH;
+                        newX = Math.max(0, Math.min(rightEdge - 100, origX + dx));
+                        newW = rightEdge - newX;
+                        newY = Math.max(0, Math.min(bottomEdge - 100, origY + dy));
+                        newH = bottomEdge - newY;
+                    }
+
+                    setZones(prev => prev.map(item => item.id === dragAction.zoneId ? {
+                        ...item,
+                        x: Math.round(newX / 2) * 2,
+                        y: Math.round(newY / 2) * 2,
+                        width: Math.round(newW / 2) * 2,
+                        height: Math.round(newH / 2) * 2
+                    } : item));
+                }
+            };
+
+            const handleSvgMouseUp = () => {
+                if (dragAction) {
+                    if (dragAction.type === 'draw') {
+                        setActiveTool('select');
+                    }
+                    setDragAction(null);
+                }
+            };
+
+            const addPresetZone = (type) => {
+                let newZone;
+                if (type === 'host') {
+                    newZone = {
+                        id: `zone_host_${Date.now().toString().slice(-4)}`,
+                        label: 'Host (Left)',
+                        x: 0, y: 0, width: 960, height: 1080,
+                        speaker_label: 'SPEAKER_00', color: '#3b82f6', is_wide: false
+                    };
+                } else if (type === 'guest') {
+                    newZone = {
+                        id: `zone_guest_${Date.now().toString().slice(-4)}`,
+                        label: 'Guest (Right)',
+                        x: 960, y: 0, width: 960, height: 1080,
+                        speaker_label: 'SPEAKER_01', color: '#10b981', is_wide: false
+                    };
+                } else if (type === 'wide') {
+                    newZone = {
+                        id: `zone_wide_${Date.now().toString().slice(-4)}`,
+                        label: 'Wide 2-Shot',
+                        x: 0, y: 0, width: 1920, height: 1080,
+                        speaker_label: null, color: '#8b5cf6', is_wide: true
+                    };
+                } else if (type === 'facecam') {
+                    newZone = {
+                        id: `zone_facecam_${Date.now().toString().slice(-4)}`,
+                        label: 'Gaming Facecam',
+                        x: 1280, y: 60, width: 600, height: 380,
+                        speaker_label: 'SPEAKER_00', color: '#f59e0b', is_facecam: true
+                    };
+                } else if (type === 'gameplay') {
+                    newZone = {
+                        id: `zone_gameplay_${Date.now().toString().slice(-4)}`,
+                        label: 'Gameplay View',
+                        x: 0, y: 0, width: 1920, height: 1080,
+                        speaker_label: null, color: '#ec4899', is_gameplay: true
+                    };
+                }
+                if (newZone) {
+                    setZones(prev => [...prev, newZone]);
+                    setSelectedZoneId(newZone.id);
+                }
+            };
+
+            const selectedZone = zones.find(z => z.id === selectedZoneId);
 
             return (
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6">
-                    <div>
-                        <span className="text-xs font-bold tracking-widest text-blue-400 uppercase">Interactive Studio</span>
-                        <h2 className="text-2xl font-bold text-white tracking-tight">Canvas Rebrander & Visual Editor</h2>
-                        <p className="text-sm text-slate-400 mt-1">
-                            Fine-tune layout bounding boxes, watermark positioning, and custom overlays visually.
-                        </p>
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 lg:p-8 space-y-6 shadow-2xl">
+                    {/* Header with Title and Global Actions */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800/80">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold tracking-widest text-blue-400 uppercase">HITL Studio</span>
+                                <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-full text-[10px] font-bold">
+                                    Virtual TV Director Ready
+                                </span>
+                            </div>
+                            <h2 className="text-2xl font-bold text-white tracking-tight mt-1">
+                                Human-in-the-Loop Camera Zones Studio
+                            </h2>
+                            <p className="text-xs text-slate-400 mt-1">
+                                Visually position Host, Guest, Wide, and Facecam boxes once per video. The Ollama Director switches between them seamlessly.
+                            </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                            {toastMessage && (
+                                <div className="px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-semibold rounded-xl flex items-center gap-1.5 animate-fade-in">
+                                    <Icon name="check" className="w-3.5 h-3.5" />
+                                    {toastMessage}
+                                </div>
+                            )}
+
+                            <button
+                                type="button"
+                                onClick={handleAutoDetect}
+                                disabled={isDetecting || !activeVideo}
+                                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-semibold rounded-xl text-xs flex items-center gap-2 border border-slate-700 transition"
+                            >
+                                {isDetecting ? (
+                                    <>
+                                        <Icon name="loader-2" className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                                        Analyzing Video...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Icon name="sparkles" className="w-3.5 h-3.5 text-blue-400" />
+                                        Auto-Detect Faces
+                                    </>
+                                )}
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={handleSave}
+                                disabled={isSaving || !activeVideo}
+                                className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-blue-600/30 transition active:scale-95"
+                            >
+                                {isSaving ? (
+                                    <>
+                                        <Icon name="loader-2" className="w-3.5 h-3.5 animate-spin" />
+                                        Saving...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Icon name="save" className="w-3.5 h-3.5" />
+                                        Save Camera Framing
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        {/* Canvas preview */}
-                        <div className="lg:col-span-1 flex flex-col items-center justify-center p-4 bg-slate-950 rounded-2xl border border-slate-800">
-                            <div className="w-full max-w-[280px] aspect-[9/16] bg-slate-900 rounded-xl overflow-hidden relative flex items-center justify-center border-2 border-blue-500/30 shadow-xl">
-                                {activeVideo ? (
-                                    <img
-                                        src={`/get_frame?video=${encodeURIComponent(activeVideo)}`}
-                                        alt="Video Frame"
-                                        className="w-full h-full object-cover"
-                                    />
-                                ) : (
-                                    <span className="text-xs text-slate-500">Select a video to preview</span>
-                                )}
+                    {/* Mode and Video Selection Row */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="block text-xs font-semibold text-slate-300">Active Video</label>
+                            <select
+                                value={activeVideo}
+                                onChange={(e) => {
+                                    setActiveVideo(e.target.value);
+                                    if (setSelectedVideo) setSelectedVideo(e.target.value);
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                            >
+                                {videos.map(v => (
+                                    <option key={v} value={v}>{v}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="block text-xs font-semibold text-slate-300">Broadcast Direction Mode</label>
+                            <div className="grid grid-cols-3 gap-1 bg-slate-950 border border-slate-800 p-1 rounded-xl">
+                                <button
+                                    type="button"
+                                    onClick={() => setMode('podcast')}
+                                    className={`py-1.5 rounded-lg text-xs font-semibold transition ${mode === 'podcast' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    Podcast
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setMode('gaming')}
+                                    className={`py-1.5 rounded-lg text-xs font-semibold transition ${mode === 'gaming' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    Gaming
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setMode('solo')}
+                                    className={`py-1.5 rounded-lg text-xs font-semibold transition ${mode === 'solo' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    Solo
+                                </button>
                             </div>
                         </div>
 
-                        {/* Controls */}
-                        <div className="lg:col-span-2 space-y-4">
-                            <div className="space-y-2">
-                                <label className="block text-xs font-semibold text-slate-300">Active Video Selection</label>
-                                <select
-                                    value={activeVideo}
-                                    onChange={(e) => setActiveVideo(e.target.value)}
-                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none"
+                        <div className="space-y-1.5">
+                            <label className="block text-xs font-semibold text-slate-300">Dual Banter Split Preference</label>
+                            <div className="grid grid-cols-2 gap-1 bg-slate-950 border border-slate-800 p-1 rounded-xl">
+                                <button
+                                    type="button"
+                                    onClick={() => setSplitPreference('split_stack')}
+                                    className={`py-1.5 rounded-lg text-xs font-semibold transition ${splitPreference === 'split_stack' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
                                 >
-                                    {videos.map(v => (
-                                        <option key={v} value={v}>{v}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="block text-xs font-semibold text-slate-300">Watermark / Logo Preset</label>
-                                <select
-                                    value={selectedLogo}
-                                    onChange={(e) => setSelectedLogo(e.target.value)}
-                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none"
+                                    9:8 Split Stack
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSplitPreference('wide')}
+                                    className={`py-1.5 rounded-lg text-xs font-semibold transition ${splitPreference === 'wide' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
                                 >
-                                    <option value="">No logo</option>
-                                    {logos.map(l => (
-                                        <option key={l} value={l}>{l}</option>
-                                    ))}
-                                </select>
+                                    Wide 2-Shot
+                                </button>
                             </div>
+                        </div>
+                    </div>
 
-                            <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2 text-xs text-slate-400">
-                                <p className="font-semibold text-white">Opus-Level Automation Note:</p>
-                                <p>
-                                    The automated AI Pipeline handles dynamic speaker tracking, kinetic ASS karaoke subtitles, and 30s-50s clip curation automatically. Use the AI Curation Pipeline tab for complete 1-click batch generation.
+                    {/* Studio Main Workspace: Interactive Canvas + Zone Inspector */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+                        {/* Interactive Visual Canvas with Video Playback & Drag-to-Select (Col 7) */}
+                        <div className="lg:col-span-7 space-y-4">
+                            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3.5">
+                                {/* Toolbar Row */}
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl">
+                                            <button
+                                                type="button"
+                                                onClick={() => setActiveTool('select')}
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${activeTool === 'select' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                                                title="Select, Drag & Resize Zones"
+                                            >
+                                                <Icon name="move" className="w-3.5 h-3.5" />
+                                                Select / Move
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setActiveTool('draw')}
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${activeTool === 'draw' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                                                title="Drag on video to draw new camera zone"
+                                            >
+                                                <Icon name="crop" className="w-3.5 h-3.5" />
+                                                + Drag to Select Area
+                                            </button>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowLivePreview(!showLivePreview)}
+                                            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition ${showLivePreview ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'}`}
+                                        >
+                                            <Icon name="layout" className="w-3.5 h-3.5" />
+                                            9:16 Reel Preview
+                                        </button>
+                                    </div>
+
+                                    <span className="text-slate-400 font-mono text-[11px]">
+                                        {zones.length} Camera Angle{zones.length !== 1 ? 's' : ''} Configured
+                                    </span>
+                                </div>
+
+                                {/* Main 16:9 Video Player & Vector SVG Overlay */}
+                                <div
+                                    className="w-full aspect-video rounded-xl overflow-hidden relative bg-black border border-slate-800 select-none shadow-2xl"
+                                    onMouseUp={handleSvgMouseUp}
+                                    onMouseLeave={handleSvgMouseUp}
+                                >
+                                    {activeVideo ? (
+                                        <video
+                                            ref={videoRef}
+                                            src={`/inputs/${encodeURIComponent(activeVideo)}`}
+                                            onTimeUpdate={handleTimeUpdate}
+                                            onLoadedMetadata={handleLoadedMetadata}
+                                            onEnded={() => setIsPlaying(false)}
+                                            className="w-full h-full object-contain pointer-events-none"
+                                            playsInline
+                                        />
+                                    ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-xs text-slate-500">
+                                            Select a video to preview playback
+                                        </div>
+                                    )}
+
+                                    {/* SVG Interactive Overlay for Drawing, Moving & Resizing */}
+                                    <svg
+                                        ref={svgRef}
+                                        onMouseDown={handleSvgMouseDown}
+                                        onMouseMove={handleSvgMouseMove}
+                                        className={`absolute inset-0 w-full h-full pointer-events-auto ${activeTool === 'draw' ? 'cursor-crosshair' : 'cursor-default'}`}
+                                        viewBox="0 0 1920 1080"
+                                        preserveAspectRatio="none"
+                                    >
+                                        {/* Guidelines / Thirds grid when dragging */}
+                                        {dragAction && (
+                                            <g stroke="#ffffff" strokeOpacity="0.12" strokeDasharray="6,6">
+                                                <line x1="640" y1="0" x2="640" y2="1080" />
+                                                <line x1="1280" y1="0" x2="1280" y2="1080" />
+                                                <line x1="0" y1="360" x2="1920" y2="360" />
+                                                <line x1="0" y1="720" x2="1920" y2="720" />
+                                            </g>
+                                        )}
+
+                                        {zones.map(z => {
+                                            const isSelected = z.id === selectedZoneId;
+                                            return (
+                                                <g
+                                                    key={z.id}
+                                                    onMouseDown={(e) => handleZoneMouseDown(e, z)}
+                                                    className="cursor-move"
+                                                >
+                                                    {/* Camera Framing Bounding Box */}
+                                                    <rect
+                                                        x={z.x}
+                                                        y={z.y}
+                                                        width={z.width}
+                                                        height={z.height}
+                                                        stroke={z.color || '#3b82f6'}
+                                                        strokeWidth={isSelected ? "8" : "4"}
+                                                        strokeDasharray={isSelected ? "12,6" : "none"}
+                                                        fill={z.color || '#3b82f6'}
+                                                        fillOpacity={isSelected ? "0.30" : "0.12"}
+                                                        rx="12"
+                                                    />
+
+                                                    {/* Label Header Badge */}
+                                                    <rect
+                                                        x={z.x}
+                                                        y={Math.max(0, z.y - 42)}
+                                                        width={Math.min(z.width, 280)}
+                                                        height="40"
+                                                        fill={z.color || '#3b82f6'}
+                                                        rx="8"
+                                                    />
+                                                    <text
+                                                        x={z.x + 14}
+                                                        y={Math.max(26, z.y - 14)}
+                                                        fill="#ffffff"
+                                                        fontSize="22"
+                                                        fontWeight="bold"
+                                                        fontFamily="sans-serif"
+                                                    >
+                                                        {z.label}
+                                                    </text>
+
+                                                    {/* Interactive Corner Resize Handles when Selected */}
+                                                    {isSelected && (
+                                                        <g>
+                                                            {/* Top-Left */}
+                                                            <rect
+                                                                x={z.x - 14} y={z.y - 14} width="28" height="28"
+                                                                fill="#ffffff" stroke={z.color || '#3b82f6'} strokeWidth="5" rx="4"
+                                                                className="cursor-nwse-resize"
+                                                                onMouseDown={(e) => handleHandleMouseDown(e, z, 'tl')}
+                                                            />
+                                                            {/* Top-Right */}
+                                                            <rect
+                                                                x={z.x + z.width - 14} y={z.y - 14} width="28" height="28"
+                                                                fill="#ffffff" stroke={z.color || '#3b82f6'} strokeWidth="5" rx="4"
+                                                                className="cursor-nesw-resize"
+                                                                onMouseDown={(e) => handleHandleMouseDown(e, z, 'tr')}
+                                                            />
+                                                            {/* Bottom-Left */}
+                                                            <rect
+                                                                x={z.x - 14} y={z.y + z.height - 14} width="28" height="28"
+                                                                fill="#ffffff" stroke={z.color || '#3b82f6'} strokeWidth="5" rx="4"
+                                                                className="cursor-nesw-resize"
+                                                                onMouseDown={(e) => handleHandleMouseDown(e, z, 'bl')}
+                                                            />
+                                                            {/* Bottom-Right */}
+                                                            <rect
+                                                                x={z.x + z.width - 14} y={z.y + z.height - 14} width="28" height="28"
+                                                                fill="#ffffff" stroke={z.color || '#3b82f6'} strokeWidth="5" rx="4"
+                                                                className="cursor-nwse-resize"
+                                                                onMouseDown={(e) => handleHandleMouseDown(e, z, 'br')}
+                                                            />
+                                                        </g>
+                                                    )}
+                                                </g>
+                                            );
+                                        })}
+                                    </svg>
+                                </div>
+
+                                {/* Video Playback Scrubber & Controls */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                                    <div className="space-y-1">
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max={duration || 100}
+                                            step="0.1"
+                                            value={currentTime}
+                                            onChange={(e) => seekTo(parseFloat(e.target.value))}
+                                            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        />
+                                        <div className="flex justify-between text-[11px] font-mono text-slate-400">
+                                            <span className="text-blue-400 font-bold">{currentTime.toFixed(1)}s</span>
+                                            <span>Duration: {duration.toFixed(1)}s</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={togglePlay}
+                                                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition active:scale-95"
+                                            >
+                                                <Icon name={isPlaying ? "pause" : "play"} className="w-3.5 h-3.5" />
+                                                {isPlaying ? "Pause" : "Play"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => seekTo(Math.max(0, currentTime - 5))}
+                                                className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-mono"
+                                            >
+                                                -5s
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => seekTo(Math.min(duration, currentTime + 5))}
+                                                className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-mono"
+                                            >
+                                                +5s
+                                            </button>
+                                        </div>
+
+                                        <div className="text-[11px] text-slate-400">
+                                            {activeTool === 'draw' ? (
+                                                <span className="text-emerald-400 font-bold">● Click and drag across video to frame face/area</span>
+                                            ) : (
+                                                <span>Click any box to inspect & drag corners to resize</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Preset Camera Quick-Add Buttons */}
+                                <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800/80">
+                                    <span className="text-[11px] font-semibold text-slate-400 mr-1">Add Preset Angle:</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => addPresetZone('host')}
+                                        className="px-2.5 py-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-medium transition"
+                                    >
+                                        + Host (Left)
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => addPresetZone('guest')}
+                                        className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-medium transition"
+                                    >
+                                        + Guest (Right)
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => addPresetZone('wide')}
+                                        className="px-2.5 py-1 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded-lg text-xs font-medium transition"
+                                    >
+                                        + Wide 2-Shot
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => addPresetZone('facecam')}
+                                        className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-medium transition"
+                                    >
+                                        + Facecam
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => addPresetZone('gameplay')}
+                                        className="px-2.5 py-1 bg-pink-500/10 hover:bg-pink-500/20 text-pink-300 border border-pink-500/30 rounded-lg text-xs font-medium transition"
+                                    >
+                                        + Gameplay
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Zone Inspector & Live 9:16 Feed Preview (Col 5) */}
+                        <div className="lg:col-span-5 space-y-4">
+                            {/* Live 9:16 Vertical Reel Crop Preview Monitor */}
+                            {showLivePreview && selectedZone && (
+                                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: selectedZone.color || '#3b82f6' }} />
+                                            <h4 className="text-xs font-bold text-white tracking-tight">9:16 Vertical Crop Live Preview</h4>
+                                        </div>
+                                        <span className="text-[10px] font-mono text-blue-400">
+                                            {selectedZone.width}x{selectedZone.height}
+                                        </span>
+                                    </div>
+
+                                    {/* 9:16 Cropped Canvas Container */}
+                                    <div className="w-48 aspect-[9/16] mx-auto rounded-xl overflow-hidden relative bg-black border border-slate-800 shadow-xl">
+                                        <div
+                                            className="absolute"
+                                            style={{
+                                                width: `${(1920 / selectedZone.width) * 100}%`,
+                                                height: `${(1080 / selectedZone.height) * 100}%`,
+                                                left: `-${(selectedZone.x / selectedZone.width) * 100}%`,
+                                                top: `-${(selectedZone.y / selectedZone.height) * 100}%`
+                                            }}
+                                        >
+                                            <video
+                                                src={`/inputs/${encodeURIComponent(activeVideo)}`}
+                                                currentTime={currentTime}
+                                                className="w-full h-full object-cover pointer-events-none"
+                                                playsInline
+                                                muted
+                                            />
+                                        </div>
+
+                                        <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/70 backdrop-blur-md rounded text-[10px] font-bold text-white">
+                                            {selectedZone.label}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-sm font-bold text-white tracking-tight">Camera Angles Configuration</h3>
+                                    <span className="text-[11px] text-slate-500 font-mono">1080x1920 Reels Grid</span>
+                                </div>
+
+                                <div className="space-y-3 max-h-[380px] overflow-y-auto custom-scrollbar pr-1">
+                                    {zones.length === 0 ? (
+                                        <div className="p-6 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                                            No camera zones defined yet. Click "Auto-Detect Faces" or add an angle preset.
+                                        </div>
+                                    ) : (
+                                        zones.map((z, idx) => {
+                                            const isSelected = z.id === selectedZoneId;
+                                            return (
+                                                <div
+                                                    key={z.id}
+                                                    onClick={() => setSelectedZoneId(z.id)}
+                                                    className={`p-3.5 rounded-xl border transition cursor-pointer space-y-2.5 ${
+                                                        isSelected
+                                                            ? 'bg-slate-900 border-blue-500/80 shadow-md'
+                                                            : 'bg-slate-900/40 border-slate-800/80 hover:border-slate-700'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="flex items-center gap-2 flex-1">
+                                                            <span
+                                                                className="w-3 h-3 rounded-full flex-shrink-0"
+                                                                style={{ backgroundColor: z.color || '#3b82f6' }}
+                                                            />
+                                                            <input
+                                                                type="text"
+                                                                value={z.label}
+                                                                onChange={(e) => updateZone(z.id, 'label', e.target.value)}
+                                                                className="bg-transparent text-xs font-bold text-white focus:outline-none focus:border-b focus:border-blue-500 w-full"
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                deleteZone(z.id);
+                                                            }}
+                                                            className="p-1 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded transition"
+                                                        >
+                                                            <Icon name="trash-2" className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-2 gap-2 text-xs">
+                                                        <div>
+                                                            <span className="text-[10px] text-slate-500 uppercase font-mono block">Speaker Binding</span>
+                                                            <select
+                                                                value={z.speaker_label || ''}
+                                                                onChange={(e) => updateZone(z.id, 'speaker_label', e.target.value || null)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-white text-[11px] focus:outline-none"
+                                                            >
+                                                                <option value="">Any Speaker</option>
+                                                                <option value="SPEAKER_00">Host (SPEAKER_00)</option>
+                                                                <option value="SPEAKER_01">Guest 1 (SPEAKER_01)</option>
+                                                                <option value="SPEAKER_02">Guest 2 (SPEAKER_02)</option>
+                                                            </select>
+                                                        </div>
+
+                                                        <div>
+                                                            <span className="text-[10px] text-slate-500 uppercase font-mono block">Color Accent</span>
+                                                            <input
+                                                                type="color"
+                                                                value={z.color || '#3b82f6'}
+                                                                onChange={(e) => updateZone(z.id, 'color', e.target.value)}
+                                                                className="w-full h-7 bg-slate-950 border border-slate-800 rounded cursor-pointer p-0.5"
+                                                            />
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Coordinates */}
+                                                    <div className="grid grid-cols-4 gap-1.5 pt-1 text-[11px] font-mono">
+                                                        <div>
+                                                            <span className="text-[9px] text-slate-500 uppercase">X</span>
+                                                            <input
+                                                                type="number"
+                                                                value={z.x}
+                                                                onChange={(e) => updateZone(z.id, 'x', parseInt(e.target.value) || 0)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-center text-slate-300"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <span className="text-[9px] text-slate-500 uppercase">Y</span>
+                                                            <input
+                                                                type="number"
+                                                                value={z.y}
+                                                                onChange={(e) => updateZone(z.id, 'y', parseInt(e.target.value) || 0)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-center text-slate-300"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <span className="text-[9px] text-slate-500 uppercase">W</span>
+                                                            <input
+                                                                type="number"
+                                                                value={z.width}
+                                                                onChange={(e) => updateZone(z.id, 'width', parseInt(e.target.value) || 100)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-center text-slate-300"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <span className="text-[9px] text-slate-500 uppercase">H</span>
+                                                            <input
+                                                                type="number"
+                                                                value={z.height}
+                                                                onChange={(e) => updateZone(z.id, 'height', parseInt(e.target.value) || 100)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-center text-slate-300"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+
+                                <div className="p-3 bg-slate-900/60 border border-slate-800/80 rounded-xl space-y-1.5 text-xs text-slate-400">
+                                    <p className="font-semibold text-white flex items-center gap-1.5">
+                                        <Icon name="sparkles" className="w-3.5 h-3.5 text-blue-400" />
+                                        9:8 Vertical Split-Screen Architecture
+                                    </p>
+                                    <p className="text-[11px] leading-relaxed">
+                                        When both speakers banter or debate, the engine stacks Host on top (1080x960) and Guest on bottom (1080x960), placing kinetic karaoke subtitles cleanly along the center boundary seam.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // -------------------------------------------------------------------
+        // Virtual TV Broadcast Director Preview & Reviewer Modal
+        // -------------------------------------------------------------------
+        function DirectorPreviewModal({
+            isOpen, onClose, clip, clipIndex, videoName, shots,
+            isLoadingDirector, onUpdateClipField, renderSpeed, setRenderSpeed,
+            onRenderApproved, isRenderingSingle, renderedClipResult
+        }) {
+            const videoRef = useRef(null);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [currentTime, setCurrentTime] = useState(clip?.start || 0);
+
+            useEffect(() => {
+                if (videoRef.current && clip) {
+                    videoRef.current.currentTime = clip.start;
+                    setCurrentTime(clip.start);
+                }
+            }, [clip?.start]);
+
+            const handleTimeUpdate = () => {
+                if (!videoRef.current) return;
+                const ct = videoRef.current.currentTime;
+                setCurrentTime(ct);
+                // Loop within clip boundaries
+                if (ct >= clip.end) {
+                    videoRef.current.currentTime = clip.start;
+                }
+            };
+
+            const togglePlay = () => {
+                if (!videoRef.current) return;
+                if (isPlaying) {
+                    videoRef.current.pause();
+                    setIsPlaying(false);
+                } else {
+                    videoRef.current.play();
+                    setIsPlaying(true);
+                }
+            };
+
+            const seekTo = (t) => {
+                if (!videoRef.current) return;
+                videoRef.current.currentTime = t;
+                setCurrentTime(t);
+            };
+
+            const setInPoint = () => {
+                if (!videoRef.current) return;
+                const ct = Math.max(0, videoRef.current.currentTime);
+                onUpdateClipField('start', ct);
+            };
+
+            const setOutPoint = () => {
+                if (!videoRef.current) return;
+                const ct = Math.min(clip.start + 60, videoRef.current.currentTime);
+                if (ct > clip.start) {
+                    onUpdateClipField('end', ct);
+                }
+            };
+
+            // Identify active camera shot at currentTime
+            const relTime = Math.max(0, currentTime - clip.start);
+            const activeShot = shots.find(s => relTime >= s.start && relTime <= s.end);
+
+            return (
+                <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-scale-in">
+                        {/* Modal Header */}
+                        <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold tracking-widest text-blue-400 uppercase">Interactive Studio</span>
+                                    <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-full text-[10px] font-bold">
+                                        TV Broadcast Director
+                                    </span>
+                                </div>
+                                <h3 className="text-xl font-bold text-white tracking-tight mt-1">
+                                    Clip #{clipIndex !== null ? clipIndex + 1 : 1} Director Preview & Fine-Tuning
+                                </h3>
+                                <p className="text-xs text-slate-400">
+                                    Source: <code className="text-blue-400 font-mono">{videoName}</code> | Range: {clip.start.toFixed(1)}s – {clip.end.toFixed(1)}s ({(clip.end - clip.start).toFixed(1)}s)
                                 </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition"
+                            >
+                                <Icon name="x" className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Modal Body */}
+                        <div className="p-6 overflow-y-auto custom-scrollbar flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6">
+                            {/* Left: Video Player & Scrubbing (Col 7) */}
+                            <div className="lg:col-span-7 space-y-4">
+                                <div className="bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden relative aspect-video flex items-center justify-center shadow-inner">
+                                    <video
+                                        ref={videoRef}
+                                        src={`/inputs/${encodeURIComponent(videoName)}`}
+                                        onTimeUpdate={handleTimeUpdate}
+                                        onEnded={() => setIsPlaying(false)}
+                                        className="w-full h-full object-contain"
+                                    />
+
+                                    {/* Active Live Director Camera Badge */}
+                                    <div className="absolute top-3 left-3 px-3 py-1 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-lg text-xs font-bold text-white flex items-center gap-2 shadow-lg">
+                                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                                        <span>
+                                            {activeShot ? (
+                                                activeShot.type === 'split_stack' ? '9:8 Dual Split-Screen' :
+                                                activeShot.camera === 'zone_host' ? 'Solo Host (Zone 1)' :
+                                                activeShot.camera === 'zone_guest' ? 'Solo Guest (Zone 2)' :
+                                                activeShot.camera === 'zone_wide' ? 'Wide 2-Shot' :
+                                                `Angle: ${activeShot.camera}`
+                                            ) : 'Director Live Cut'}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Scrubber & In/Out Controls */}
+                                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                                    {/* Scrubber slider */}
+                                    <div className="space-y-1">
+                                        <input
+                                            type="range"
+                                            min={clip.start}
+                                            max={clip.end}
+                                            step="0.1"
+                                            value={currentTime}
+                                            onChange={(e) => seekTo(parseFloat(e.target.value))}
+                                            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        />
+                                        <div className="flex justify-between text-[11px] font-mono text-slate-400">
+                                            <span>In: {clip.start.toFixed(1)}s</span>
+                                            <span className="text-blue-400 font-bold">{currentTime.toFixed(1)}s</span>
+                                            <span>Out: {clip.end.toFixed(1)}s</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Playback Controls & Set In/Out */}
+                                    <div className="flex items-center justify-between pt-1">
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={togglePlay}
+                                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition"
+                                            >
+                                                <Icon name={isPlaying ? "pause" : "play"} className="w-3.5 h-3.5" />
+                                                {isPlaying ? "Pause" : "Play Clip"}
+                                            </button>
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={setInPoint}
+                                                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1 border border-slate-700 transition"
+                                                title="Set In Point to Current Time"
+                                            >
+                                                <Icon name="scissors" className="w-3 h-3 text-blue-400" />
+                                                Set In (I)
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={setOutPoint}
+                                                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1 border border-slate-700 transition"
+                                                title="Set Out Point to Current Time"
+                                            >
+                                                <Icon name="scissors" className="w-3 h-3 text-blue-400" />
+                                                Set Out (O)
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Right: Headline & Director Cuts Timeline (Col 5) */}
+                            <div className="lg:col-span-5 space-y-4">
+                                {/* Viral Hook Headline Input */}
+                                <div className="space-y-1.5">
+                                    <label className="block text-xs font-semibold text-slate-300">
+                                        Viral Hook Headline Banner
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={clip.hook_sentence || clip.title || ''}
+                                        onChange={(e) => onUpdateClipField('hook_sentence', e.target.value)}
+                                        placeholder="Enter high-impact hook headline..."
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500 transition"
+                                    />
+                                </div>
+
+                                {/* Virtual TV Director Cuts Timeline */}
+                                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-xs font-bold text-white tracking-tight flex items-center gap-1.5">
+                                            <Icon name="video" className="w-3.5 h-3.5 text-blue-400" />
+                                            TV Director Shot Timeline
+                                        </h4>
+                                        <span className="text-[10px] text-slate-400 font-mono">
+                                            {shots.length} camera cuts
+                                        </span>
+                                    </div>
+
+                                    {isLoadingDirector ? (
+                                        <div className="p-6 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
+                                            <Icon name="loader-2" className="w-5 h-5 text-blue-400 animate-spin" />
+                                            <span>Ollama TV Director analyzing dialogue context...</span>
+                                        </div>
+                                    ) : shots.length === 0 ? (
+                                        <div className="p-4 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                                            No director cuts planned yet.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2 max-h-[220px] overflow-y-auto custom-scrollbar pr-1">
+                                            {shots.map((shot, sIdx) => {
+                                                const shotDur = (shot.end - shot.start).toFixed(1);
+                                                const isCurrent = activeShot === shot;
+                                                return (
+                                                    <div
+                                                        key={sIdx}
+                                                        onClick={() => seekTo(clip.start + shot.start)}
+                                                        className={`p-2.5 rounded-xl border text-xs cursor-pointer transition flex items-center justify-between ${
+                                                            isCurrent
+                                                                ? 'bg-blue-600/20 border-blue-500 text-white font-semibold shadow-md'
+                                                                : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:border-slate-700'
+                                                        }`}
+                                                    >
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`w-2 h-2 rounded-full ${
+                                                                shot.type === 'split_stack' ? 'bg-purple-400' :
+                                                                shot.camera === 'zone_host' ? 'bg-blue-400' :
+                                                                shot.camera === 'zone_guest' ? 'bg-emerald-400' : 'bg-amber-400'
+                                                            }`} />
+                                                            <span>
+                                                                {shot.type === 'split_stack' ? '9:8 Split Stack' :
+                                                                 shot.camera === 'zone_host' ? 'Host Solo' :
+                                                                 shot.camera === 'zone_guest' ? 'Guest Solo' :
+                                                                 shot.camera === 'zone_wide' ? 'Wide 2-Shot' : shot.camera}
+                                                            </span>
+                                                        </div>
+                                                        <span className="font-mono text-[11px] text-slate-400">
+                                                            {shot.start.toFixed(1)}s - {shot.end.toFixed(1)}s ({shotDur}s)
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Speed and Render Action */}
+                                <div className="pt-2 space-y-3">
+                                    <div className="flex items-center justify-between text-xs">
+                                        <span className="text-slate-400">Anti-Detection Speed:</span>
+                                        <select
+                                            value={renderSpeed}
+                                            onChange={(e) => setRenderSpeed(parseFloat(e.target.value))}
+                                            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-white font-mono text-xs focus:outline-none"
+                                        >
+                                            <option value={1.0}>1.0x (Normal)</option>
+                                            <option value={1.08}>1.08x (Subtle)</option>
+                                            <option value={1.12}>1.12x (Standard)</option>
+                                            <option value={1.15}>1.15x (Fast)</option>
+                                        </select>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={onRenderApproved}
+                                        disabled={isRenderingSingle}
+                                        className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition active:scale-[0.99]"
+                                    >
+                                        {isRenderingSingle ? (
+                                            <>
+                                                <Icon name="loader-2" className="w-4 h-4 animate-spin" />
+                                                Rendering Reel with NVENC...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Icon name="sparkles" className="w-4 h-4" />
+                                                Approve & Render Reel (1080x1920)
+                                            </>
+                                        )}
+                                    </button>
+
+                                    {/* Finished Single Render Download Card */}
+                                    {renderedClipResult && (
+                                        <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl space-y-2">
+                                            <p className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                                                <Icon name="check" className="w-4 h-4" />
+                                                Render Completed Successfully!
+                                            </p>
+                                            <a
+                                                href={renderedClipResult.download_url}
+                                                download
+                                                className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition"
+                                            >
+                                                <Icon name="download" className="w-3.5 h-3.5" />
+                                                Download {renderedClipResult.output_filename}
+                                            </a>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </div>

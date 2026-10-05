@@ -427,14 +427,105 @@ def build_ffmpeg_command(
 
     layout = trajectory.get("layout", "") if trajectory else ""
     is_gaming_layout = trajectory.get("is_gaming_layout", False) if trajectory else False
+    shots = trajectory.get("shot_timeline", []) if trajectory else []
+    has_shot_timeline = bool(shots) and len(shots) > 0
     is_dual_speaker = (
         layout == "dual_speaker_split"
         or bool(trajectory.get("is_dual_speaker", False) if trajectory else False)
+        or any(s.get("type") == "split_stack" for s in shots)
     )
 
     split_src = "[0:v]"
 
-    if is_gaming_layout:
+    if has_shot_timeline:
+        # Multi-Stream Virtual TV Broadcast Director Timeline
+        print(f"[engine_ffmpeg] Building Virtual TV Director Shot Timeline ({len(shots)} cuts)")
+        split_spec = "".join(f"[raw_s{i}]" for i in range(len(shots)))
+        filter_complex_parts.append(f"{split_src}split={len(shots)}{split_spec}")
+
+        for i, shot in enumerate(shots):
+            s_start = max(0.0, float(shot.get("start", 0.0)))
+            s_end = float(shot.get("end", 0.0))
+            shot_type = shot.get("type", "single")
+            trim_filter = f"trim=start={s_start:.2f}:end={s_end:.2f},setpts=PTS-STARTPTS"
+
+            if shot_type == "split_stack":
+                top_z = shot.get("top_zone") or {}
+                bot_z = shot.get("bot_zone") or {}
+                tx = max(0, int(round(top_z.get("x", 0))))
+                ty = max(0, int(round(top_z.get("y", 0))))
+                tw = max(2, int(round(top_z.get("width", 1080) / 2.0)) * 2)
+                th = max(2, int(round(top_z.get("height", 1080) / 2.0)) * 2)
+
+                bx = max(0, int(round(bot_z.get("x", 0))))
+                by = max(0, int(round(bot_z.get("y", 0))))
+                bw = max(2, int(round(bot_z.get("width", 1080) / 2.0)) * 2)
+                bh = max(2, int(round(bot_z.get("height", 1080) / 2.0)) * 2)
+
+                filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_top_raw][s{i}_bot_raw]")
+                filter_complex_parts.append(
+                    f"[s{i}_top_raw]crop=w='min(iw,{tw})':h='min(ih,{th})':x='max(0,min({tx},iw-min(iw,{tw})))':y='max(0,min({ty},ih-min(ih,{th})))',"
+                    f"scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_top]"
+                )
+                filter_complex_parts.append(
+                    f"[s{i}_bot_raw]crop=w='min(iw,{bw})':h='min(ih,{bh})':x='max(0,min({bx},iw-min(iw,{bw})))':y='max(0,min({by},ih-min(ih,{bh})))',"
+                    f"scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_bot]"
+                )
+                filter_complex_parts.append(
+                    f"[s{i}_top][s{i}_bot]vstack=inputs=2,drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill[v_shot_{i}]"
+                )
+            elif shot_type == "gaming":
+                cam_z = shot.get("facecam_zone") or shot.get("top_zone") or {}
+                cx = max(0, int(round(cam_z.get("x", 0))))
+                cy = max(0, int(round(cam_z.get("y", 0))))
+                cw = max(2, int(round(cam_z.get("width", 640) / 2.0)) * 2)
+                ch = max(2, int(round(cam_z.get("height", 360) / 2.0)) * 2)
+
+                filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_cam_raw][s{i}_game_raw]")
+                filter_complex_parts.append(
+                    f"[s{i}_cam_raw]crop=w='min(iw,{cw})':h='min(ih,{ch})':x='max(0,min({cx},iw-min(iw,{cw})))':y='max(0,min({cy},ih-min(ih,{ch})))',"
+                    f"scale=1080:672:force_original_aspect_ratio=increase,crop=1080:672:(in_w-1080)/2:(in_h-672)/2[s{i}_cam]"
+                )
+                filter_complex_parts.append(
+                    f"[s{i}_game_raw]scale=1080:1248:force_original_aspect_ratio=increase,crop=1080:1248:(in_w-1080)/2:(in_h-1248)/2[s{i}_game]"
+                )
+                filter_complex_parts.append(
+                    f"[s{i}_cam][s{i}_game]vstack=inputs=2[v_shot_{i}]"
+                )
+            else:
+                zone = shot.get("zone") or {}
+                zx = max(0, int(round(zone.get("x", 0))))
+                zy = max(0, int(round(zone.get("y", 0))))
+                zw = max(2, int(round(zone.get("width", 1080) / 2.0)) * 2)
+                zh = max(2, int(round(zone.get("height", 1080) / 2.0)) * 2)
+                ar = zw / max(1.0, float(zh))
+
+                if 0.5 <= ar <= 0.65:
+                    filter_complex_parts.append(
+                        f"[raw_s{i}]{trim_filter},"
+                        f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
+                        f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[v_shot_{i}]"
+                    )
+                else:
+                    filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_bg_raw][s{i}_fg_raw]")
+                    filter_complex_parts.append(
+                        f"[s{i}_bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[s{i}_bg]"
+                    )
+                    filter_complex_parts.append(
+                        f"[s{i}_fg_raw]crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
+                        f"scale=1080:-2[s{i}_fg]"
+                    )
+                    filter_complex_parts.append(
+                        f"[s{i}_bg][s{i}_fg]overlay=0:(H-h)/2[v_shot_{i}]"
+                    )
+
+        concat_inputs = "".join(f"[v_shot_{i}]" for i in range(len(shots)))
+        filter_complex_parts.append(f"{concat_inputs}concat=n={len(shots)}:v=1:a=0[comp_concat]")
+        filter_complex_parts.append(
+            f"[comp_concat]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},{eq_filter},format=yuv420p[comp0]"
+        )
+
+    elif is_gaming_layout:
         # Phase 2 Gaming Split-Screen Stack
         print("[engine_ffmpeg] Building Split-Screen Gaming Layout")
         webcam_rect = trajectory.get("webcam_region", (0, 0, 1920, 1080))
@@ -514,6 +605,29 @@ def build_ffmpeg_command(
             "[stacked]drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill,"
             "format=yuv420p[comp0]"
         )
+
+    elif layout == "camera_zone":
+        # Single creator-defined camera zone
+        zone = trajectory.get("zone", {}) if trajectory else {}
+        zx = max(0, int(round(zone.get("x", 0))))
+        zy = max(0, int(round(zone.get("y", 0))))
+        zw = max(2, int(round(zone.get("width", 1080) / 2.0)) * 2)
+        zh = max(2, int(round(zone.get("height", 1080) / 2.0)) * 2)
+        ar = zw / max(1.0, float(zh))
+
+        filter_complex_parts.append(f"{split_src}split=2[bg_raw][vid_raw]")
+        filter_complex_parts.append(
+            f"[bg_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[bg]"
+        )
+        filter_complex_parts.append(
+            f"[vid_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"{eq_filter},"
+            f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
+            f"scale=1080:-2,format=yuv420p[vid]"
+        )
+        filter_complex_parts.append(f"[bg][vid]overlay=0:(H-h)/2:shortest=1,format=yuv420p[comp0]")
 
     else:
         # 1. Base blurred background canvas locked strictly to input video duration (prevents infinite stream bug)

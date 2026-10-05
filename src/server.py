@@ -67,6 +67,8 @@ import curation_engine
 import pipeline
 from engine_watermark import detect_blurred_logos, WatermarkRejectionError
 import memory_sync
+import camera_framing
+import ollama_director
 
 # Initialize the render queue manager and start background worker
 render_queue_manager = RenderQueueManager.get_instance()
@@ -309,6 +311,37 @@ class BatchRenderRequest(BaseModel):
     aspect_ratio: str = "9:16"
     audio_md5: Optional[str] = None
 
+class CameraZoneModel(BaseModel):
+    id: str
+    label: str
+    x: int
+    y: int
+    width: int
+    height: int
+    speaker_label: Optional[str] = None
+    is_wide: bool = False
+    is_facecam: bool = False
+    is_gameplay: bool = False
+    color: str = "#3b82f6"
+
+class CameraFramingSaveRequest(BaseModel):
+    file_name: str
+    source_width: Optional[int] = 1920
+    source_height: Optional[int] = 1080
+    mode: Optional[str] = "podcast"
+    split_preference: Optional[str] = "split_stack"
+    zones: List[CameraZoneModel] = []
+
+class CameraZoneSuggestRequest(BaseModel):
+    file_name: str
+
+class DirectorPlanRequest(BaseModel):
+    file_name: str
+    start: float = 0.0
+    end: Optional[float] = None
+    words: Optional[List[Dict[str, Any]]] = None
+    use_ollama: bool = True
+
 # ---------------------------------------------------------------------------
 # Background Worker Functions
 # ---------------------------------------------------------------------------
@@ -406,7 +439,24 @@ def _run_render_job(job_data, **kwargs):
                         })
                 if clip_words:
                     traj = job_data.get("trajectory") or {}
-                    is_dual = traj.get("layout") == "dual_speaker_split" or bool(traj.get("is_dual_speaker", False))
+                    if not traj.get("shot_timeline") and job_data.get("shot_timeline"):
+                        traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
+                    elif not traj.get("shot_timeline") and not traj.get("layout"):
+                        saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
+                        if saved_cfg:
+                            try:
+                                director = ollama_director.TVDirector(saved_cfg)
+                                shots = director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
+                                traj = {"layout": "director_multizone", "shot_timeline": shots}
+                            except Exception as e:
+                                logger.warning(f"[server] Auto TV director fallback: {e}")
+                    job_data["trajectory"] = traj
+
+                    is_dual = (
+                        traj.get("layout") == "dual_speaker_split"
+                        or bool(traj.get("is_dual_speaker", False))
+                        or bool(traj.get("shot_timeline") and any(s.get("type") == "split_stack" for s in traj.get("shot_timeline", [])))
+                    )
                     margin_v = 960 if is_dual else 580
                     caption_engine.generate_karaoke_ass(clip_words, ass_temp_file, margin_v=margin_v)
             except Exception as e:
@@ -578,6 +628,7 @@ app.add_middleware(
 # Mount static asset directories
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
+app.mount("/inputs", StaticFiles(directory=INPUTS_DIR), name="inputs")
 
 # ---------------------------------------------------------------------------
 # Route: Web UI Dashboard
@@ -1371,6 +1422,87 @@ def trigger_memory_sync():
     except Exception as e:
         logger.error(f"Failed to sync memory: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Memory sync failed: {e}")
+
+# ---------------------------------------------------------------------------
+# Phase 6: Human-in-the-Loop Camera Zones & Virtual TV Director Endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/camera_zones/suggest")
+def api_suggest_camera_zones(req: CameraZoneSuggestRequest):
+    """Auto-detects and suggests camera zones for source video canvas."""
+    resolved = resolve_input_video_path(req.file_name)
+    if not resolved or not os.path.isfile(resolved):
+        raise HTTPException(status_code=404, detail=f"Input video not found: {req.file_name}")
+    try:
+        config = camera_framing.suggest_camera_zones(resolved)
+        return config.to_dict()
+    except Exception as e:
+        logger.error(f"[server] Failed to suggest camera zones: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/camera_zones/save")
+def api_save_camera_zones(req: CameraFramingSaveRequest):
+    """Persists creator-defined camera zones for a source video."""
+    try:
+        cfg = camera_framing.CameraFramingConfig.from_dict(req.model_dump())
+        path = cfg.save()
+        return {
+            "status": "ok",
+            "message": "Saved camera zones successfully",
+            "config": cfg.to_dict(),
+            "path": path
+        }
+    except Exception as e:
+        logger.error(f"[server] Failed to save camera zones: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/camera_zones/{file_name}")
+def api_get_camera_zones(file_name: str):
+    """Retrieves saved camera zones for video, or auto-detects initial suggestion."""
+    cfg = camera_framing.CameraFramingConfig.load(file_name)
+    if not cfg:
+        resolved = resolve_input_video_path(file_name)
+        if resolved and os.path.isfile(resolved):
+            cfg = camera_framing.suggest_camera_zones(resolved)
+            cfg.save()
+        else:
+            cfg = camera_framing._build_default_podcast_config(file_name, 1920, 1080)
+    return cfg.to_dict()
+
+@app.post("/api/director/plan")
+def api_director_plan(req: DirectorPlanRequest):
+    """
+    Generates a TV broadcast director shot-cut timeline for a clip using Ollama or rule-based fallback.
+    """
+    try:
+        cfg = camera_framing.CameraFramingConfig.load(req.file_name)
+        if not cfg:
+            resolved = resolve_input_video_path(req.file_name)
+            if resolved and os.path.isfile(resolved):
+                cfg = camera_framing.suggest_camera_zones(resolved)
+            else:
+                cfg = camera_framing._build_default_podcast_config(req.file_name, 1920, 1080)
+
+        words = req.words or []
+        director = ollama_director.TVDirector(cfg)
+        shots = director.direct_clip(
+            words_or_dialogue=words,
+            clip_start=req.start,
+            clip_end=req.end,
+            use_ollama=req.use_ollama
+        )
+        return {
+            "status": "ok",
+            "file_name": req.file_name,
+            "start": req.start,
+            "end": req.end,
+            "shots": shots,
+            "camera_config": cfg.to_dict()
+        }
+    except Exception as e:
+        logger.error(f"[server] TV Director planning failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 if __name__ == "__main__":

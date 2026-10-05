@@ -54,6 +54,8 @@ import engine_vision
 import caption_engine
 import engine_vad
 import engine_watermark
+import camera_framing
+import ollama_director
 from engine_watermark import detect_blurred_logos, WatermarkRejectionError
 
 try:
@@ -596,14 +598,29 @@ def run_pipeline(
                         proj_end = project_timestamp(rel_end, pruned_intervals_map.get(idx, []))
                         slice_words.append({**w, "start": proj_start, "end": proj_end})
 
+            # Check if camera framing zones or multi-speaker director applies
+            traj_data = trajectory if isinstance(trajectory, dict) else {}
+            if not traj_data.get("shot_timeline"):
+                video_filename = os.path.basename(original_input_path)
+                saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
+                if saved_cfg and saved_cfg.zones:
+                    try:
+                        print(f"[pipeline] Directing Hook #{idx} with Virtual TV Director ({len(saved_cfg.zones)} zones configured)...")
+                        director = ollama_director.TVDirector(saved_cfg)
+                        shots = director.direct_clip(slice_words, clip_start=0.0, clip_end=dur, use_ollama=True)
+                        trajectory = {"layout": "director_multizone", "shot_timeline": shots}
+                        traj_data = trajectory
+                    except Exception as e:
+                        print(f"[WARN] TVDirector direct_clip failed for Hook #{idx}: {e}")
+
             if not slice_words:
                 print(f"[WARNING] Hook #{idx}: 0 words after ASR — no subtitle overlay.")
 
             slice_ass_path = os.path.join(temp_dir, f"slice_{idx}.ass")
-            traj_data = trajectory if isinstance(trajectory, dict) else {}
             is_dual = bool(
                 traj_data.get("is_dual_speaker", False)
                 or traj_data.get("layout") == "dual_speaker_split"
+                or (traj_data.get("shot_timeline") and any(s.get("type") == "split_stack" for s in traj_data.get("shot_timeline", [])))
             )
             ass_margin_v = 960 if is_dual else caption_engine.MARGIN_V
 

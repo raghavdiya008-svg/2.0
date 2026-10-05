@@ -1,0 +1,35 @@
+{
+  "file_name": "test_video.mp4",
+  "source_width": 1920,
+  "source_height": 1080,
+  "mode": "podcast",
+  "split_preference": "split_stack",
+  "zones": [
+    {
+      "id": "zone_host",
+      "label": "Host",
+      "x": 0,
+      "y": 0,
+      "width": 960,
+      "height": 1080,
+      "speaker_label": "SPEAKER_00",
+      "is_wide": false,
+      "is_facecam": false,
+      "is_gameplay": false,
+      "color": "#3b82f6"
+    },
+    {
+      "id": "zone_guest",
+      "label": "Guest",
+      "x": 960,
+      "y": 0,
+      "width": 960,
+      "height": 1080,
+      "speaker_label": "SPEAKER_01",
+      "is_wide": false,
+      "is_facecam": false,
+      "is_gameplay": false,
+      "color": "#10b981"
+    }
+  ]
+}
