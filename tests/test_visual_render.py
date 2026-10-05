@@ -130,8 +130,8 @@ def test_visual_render():
     assert "drawtext" not in fc, "FAILED: Static drawtext header was found in filter_complex!"
     assert "boxblur=25:5" in fc, "FAILED: boxblur=25:5 not found in filter_complex!"
     assert "force_original_aspect_ratio=increase" in fc, "FAILED: force_original_aspect_ratio not found!"
-    assert "scale=1080:-2" in fc, "FAILED: scale=1080:-2 not found!"
-    print("  [PASS] Filtergraph check: static drawtext completely purged; blurred backdrop stack present.")
+    assert "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" in fc, "FAILED: 1080:1920 fill crop not found!"
+    print("  [PASS] Filtergraph check: static drawtext completely purged; 1080x1920 fill crop present.")
 
     # 2. NVENC Flags Check
     assert "-preset" in cmd and cmd[cmd.index("-preset") + 1] == "p6", "FAILED: preset is not p6"

@@ -57,7 +57,7 @@ EMOJIS_DIR = os.path.join(_PROJECT_ROOT, "assets", "emojis")
 
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
-SPEED_FACTOR = 1.12
+SPEED_FACTOR = 1.10
 
 
 @dataclass
@@ -138,6 +138,32 @@ def escape_ffmpeg_drawtext(text: str) -> str:
     text = text.replace(";", "\\;")
     text = text.replace("%", "\\%")
     return text
+
+
+def wrap_headline_text(text: str, max_chars_per_line: int = 24) -> str:
+    """
+    Wraps headline text into clean, centered multi-line text (max 2-3 lines)
+    so long titles never truncate or clip off the left/right screen edges.
+    """
+    words = str(text or "").strip().split()
+    if not words:
+        return ""
+    lines = []
+    cur_line = []
+    cur_len = 0
+    for w in words:
+        if cur_len + len(w) + (1 if cur_line else 0) <= max_chars_per_line:
+            cur_line.append(w)
+            cur_len += len(w) + (1 if len(cur_line) > 1 else 0)
+        else:
+            if cur_line:
+                lines.append(" ".join(cur_line))
+            cur_line = [w]
+            cur_len = len(w)
+    if cur_line:
+        lines.append(" ".join(cur_line))
+    # Cap at 3 lines
+    return "\n".join(lines[:3])
 
 
 # ---------------------------------------------------------------------------
@@ -498,26 +524,11 @@ def build_ffmpeg_command(
                 zy = max(0, int(round(zone.get("y", 0))))
                 zw = max(2, int(round(zone.get("width", 1080) / 2.0)) * 2)
                 zh = max(2, int(round(zone.get("height", 1080) / 2.0)) * 2)
-                ar = zw / max(1.0, float(zh))
-
-                if 0.5 <= ar <= 0.65:
-                    filter_complex_parts.append(
-                        f"[raw_s{i}]{trim_filter},"
-                        f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
-                        f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[v_shot_{i}]"
-                    )
-                else:
-                    filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_bg_raw][s{i}_fg_raw]")
-                    filter_complex_parts.append(
-                        f"[s{i}_bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[s{i}_bg]"
-                    )
-                    filter_complex_parts.append(
-                        f"[s{i}_fg_raw]crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
-                        f"scale=1080:-2[s{i}_fg]"
-                    )
-                    filter_complex_parts.append(
-                        f"[s{i}_bg][s{i}_fg]overlay=0:(H-h)/2[v_shot_{i}]"
-                    )
+                filter_complex_parts.append(
+                    f"[raw_s{i}]{trim_filter},"
+                    f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
+                    f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[v_shot_{i}]"
+                )
 
         concat_inputs = "".join(f"[v_shot_{i}]" for i in range(len(shots)))
         filter_complex_parts.append(f"{concat_inputs}concat=n={len(shots)}:v=1:a=0[comp_concat]")
@@ -607,27 +618,21 @@ def build_ffmpeg_command(
         )
 
     elif layout == "camera_zone":
-        # Single creator-defined camera zone
+        # Single creator-defined camera zone: Punch in to fill 1080x1920 vertical shorts
         zone = trajectory.get("zone", {}) if trajectory else {}
         zx = max(0, int(round(zone.get("x", 0))))
         zy = max(0, int(round(zone.get("y", 0))))
         zw = max(2, int(round(zone.get("width", 1080) / 2.0)) * 2)
         zh = max(2, int(round(zone.get("height", 1080) / 2.0)) * 2)
-        ar = zw / max(1.0, float(zh))
 
-        filter_complex_parts.append(f"{split_src}split=2[bg_raw][vid_raw]")
         filter_complex_parts.append(
-            f"[bg_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
-            f"scale=1080:1920:force_original_aspect_ratio=increase,"
-            f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[bg]"
-        )
-        filter_complex_parts.append(
-            f"[vid_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"{split_src}fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
             f"{eq_filter},"
             f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
-            f"scale=1080:-2,format=yuv420p[vid]"
+            f"scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,"
+            f"format=yuv420p[comp0]"
         )
-        filter_complex_parts.append(f"[bg][vid]overlay=0:(H-h)/2:shortest=1,format=yuv420p[comp0]")
 
     else:
         # 1. Base blurred background canvas locked strictly to input video duration (prevents infinite stream bug)
@@ -696,9 +701,10 @@ def build_ffmpeg_command(
             filter_complex_parts.append(
                 f"[vid_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
                 f"{eq_filter},"
-                f"scale=1080:-2,format=yuv420p[vid]"
+                f"scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,format=yuv420p[vid_fill]"
             )
-            filter_complex_parts.append(f"[bg][vid]overlay=0:(H-h)/2:shortest=1,format=yuv420p[comp0]")
+            filter_complex_parts.append(f"[bg][vid_fill]overlay=0:0:shortest=1[comp0]")
 
     current_label = "[comp0]"
 
@@ -733,13 +739,16 @@ def build_ffmpeg_command(
         )
         current_label = "[comp_wm]"
 
-    # 5. Optional Hook Headline Banner
+    # 5. Optional Hook Headline Banner (Centered multi-line pill with auto-wrapping)
     if headline and str(headline).strip():
-        escaped_title = escape_ffmpeg_drawtext(str(headline).strip())
+        wrapped_title = wrap_headline_text(str(headline).strip(), max_chars_per_line=24)
+        escaped_title = escape_ffmpeg_drawtext(wrapped_title)
+        line_count = len(wrapped_title.split("\n"))
+        f_size = 48 if line_count > 1 else 54
         filter_complex_parts.append(
             f"{current_label}drawtext=text='{escaped_title}':"
-            f"x=(w-text_w)/2:y=150:fontsize=64:fontcolor=white:"
-            f"box=1:boxcolor=black@0.6:boxborderw=15[comp_title]"
+            f"x=(w-text_w)/2:y=130:fontsize={f_size}:fontcolor=white:line_spacing=12:"
+            f"box=1:boxcolor=black@0.75:boxborderw=20[comp_title]"
         )
         current_label = "[comp_title]"
 

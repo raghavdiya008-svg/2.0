@@ -44,6 +44,31 @@ FONT_SIZE    = 84               # ~4.4% of canvas height for 1080x1920
 MARGIN_V     = 580              # 580px from bottom (TikTok / Reels / Shorts safe zone)
 MARGIN_LR    = 40               # Left/right margin
 
+# ---------------------------------------------------------------------------
+# Strict word-boundary profanity censoring patterns (bypasses Scunthorpe problem)
+# ---------------------------------------------------------------------------
+PROFANITY_PATTERNS = [
+    (re.compile(r"\bfuck(ing|er|ed|s)?\b", re.IGNORECASE), "f***"),
+    (re.compile(r"\bshit(ting|ty|s)?\b", re.IGNORECASE), "sh*t"),
+    (re.compile(r"\bbitch(es|ing)?\b", re.IGNORECASE), "b***h"),
+    (re.compile(r"\basshole(s)?\b", re.IGNORECASE), "a**hole"),
+    (re.compile(r"\bass\b", re.IGNORECASE), "a**"),
+    (re.compile(r"\bdick(s)?\b", re.IGNORECASE), "d**k"),
+    (re.compile(r"\bpussy\b", re.IGNORECASE), "p***y"),
+    (re.compile(r"\bcunt(s)?\b", re.IGNORECASE), "c**t"),
+    (re.compile(r"\bbastard(s)?\b", re.IGNORECASE), "b***ard"),
+    (re.compile(r"\bdamn\b", re.IGNORECASE), "d*mn"),
+]
+
+def censor_profanity(text: str) -> str:
+    """Masks vulgar profanity with asterisks using word-boundary matching."""
+    if not text:
+        return ""
+    result = text
+    for pattern, repl in PROFANITY_PATTERNS:
+        result = pattern.sub(repl, result)
+    return result
+
 def hex_to_ass_color(hex_str: str, alpha: str = "00") -> str:
     """Converts a hex color (#RRGGBB or RRGGBB) to ASS color format (&HAABBGGRR)."""
     clean_hex = hex_str.lstrip("#")
@@ -246,6 +271,7 @@ def generate_karaoke_ass(
 
     for w in valid_words:
         word_text = str(w.get("word", "")).strip()
+        word_text = censor_profanity(word_text)
         if uppercase:
             word_text = word_text.upper()
 

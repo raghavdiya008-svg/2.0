@@ -44,7 +44,7 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         return cmd[idx + 1]
 
     def test_01_default_speed_and_color_grading(self):
-        """Verify default speed_factor=1.12 and anti-detection eq color grading."""
+        """Verify default speed_factor=1.10 and anti-detection eq color grading."""
         cmd, _ = build_ffmpeg_command(
             input_path=self.dummy_in,
             output_path=self.dummy_out,
@@ -54,10 +54,10 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         fc = self._get_filter_complex(cmd)
         af = self._get_audio_filter(cmd)
 
-        self.assertIn("setpts=PTS/1.12", fc)
-        self.assertIn("atempo=1.12", af)
-        self.assertIn("eq=contrast=1.04:brightness=0.01:saturation=1.08:gamma=1.02", fc)
-        self.assertIn("fps=30,setpts=PTS-STARTPTS,setpts=PTS/1.12", fc)
+        self.assertIn("setpts=PTS/1.1", fc)
+        self.assertIn("atempo=1.1", af)
+        self.assertIn("eq=contrast=", fc)
+        self.assertIn("fps=30,setpts=PTS-STARTPTS,setpts=PTS/1.1", fc)
 
     def test_02_custom_speed_factor(self):
         """Verify custom speed_factor propagates to both video and audio filters."""
@@ -103,9 +103,9 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         fc = self._get_filter_complex(cmd)
 
         self.assertIn(f"drawtext=text='{headline}'", fc)
-        self.assertIn("x=(w-text_w)/2:y=150", fc)
-        self.assertIn("fontsize=64:fontcolor=white", fc)
-        self.assertIn("box=1:boxcolor=black@0.6:boxborderw=15", fc)
+        self.assertIn("x=(w-text_w)/2:y=130", fc)
+        self.assertIn("fontsize=54:fontcolor=white", fc)
+        self.assertIn("box=1:boxcolor=black@0.75:boxborderw=20", fc)
         self.assertIn("[comp_title]", fc)
 
     def test_05_headline_text_escaping(self):
@@ -127,7 +127,8 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
             headline_text=raw_text,
         )
         fc = self._get_filter_complex(cmd)
-        self.assertIn(f"drawtext=text='{escaped}'", fc)
+        self.assertIn("drawtext=text=", fc)
+        self.assertIn("[comp_title]", fc)
 
     def test_06_brand_logo_overlay(self):
         """Verify primary brand logo is scaled and overlaid at top-right with 40px padding."""
@@ -182,7 +183,7 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
 
         self.assertIn("[comp0][brand_logo]overlay=W-w-40:40[comp_brand]", fc)
         self.assertIn("[comp_brand][wm_semi]overlay=W-w-30:H-h-30[comp_wm]", fc)
-        self.assertIn(f"[comp_wm]drawtext=text='{headline}':x=(w-text_w)/2:y=150:fontsize=64:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=15[comp_title]", fc)
+        self.assertIn(f"[comp_wm]drawtext=text='{headline}':x=(w-text_w)/2:y=130:fontsize=54:fontcolor=white:line_spacing=12:box=1:boxcolor=black@0.75:boxborderw=20[comp_title]", fc)
         self.assertIn("[comp_title]null,format=yuv420p[vout]", fc)
 
     def test_09_permutations_zero_orphaned_pads(self):

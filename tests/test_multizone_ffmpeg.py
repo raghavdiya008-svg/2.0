@@ -84,5 +84,5 @@ def test_camera_zone_single_layout():
     )
 
     fc = cmd[cmd.index("-filter_complex") + 1]
-    assert "boxblur=25:5" in fc
+    assert "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" in fc
     assert "crop=w='min(iw,800)':h='min(ih,1000)':x='max(0,min(100,iw-min(iw,800)))':y='max(0,min(50,ih-min(ih,1000)))'" in fc

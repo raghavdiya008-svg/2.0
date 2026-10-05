@@ -307,9 +307,11 @@ class BatchRenderRequest(BaseModel):
     clips: List[Dict[str, Any]]
     watermark_logo: Optional[str] = None
     brand_logo: Optional[str] = None
-    speed: float = 1.12
+    speed: float = 1.10
     aspect_ratio: str = "9:16"
     audio_md5: Optional[str] = None
+    title_y: Optional[int] = 130
+    margin_v: Optional[int] = None
 
 class CameraZoneModel(BaseModel):
     id: str
@@ -422,43 +424,71 @@ def _run_render_job(job_data, **kwargs):
             logger.error(f"[server] Slicing with FFmpeg failed for {video_filename} ({err_msg}). Aborting clip render.")
             raise RuntimeError(f"FFmpeg slicing failed for clip {start_f}-{end_f}: {err_msg}")
 
-        # Generate kinetic ASS subtitles if transcript words are provided
-        if not job_data.get("ass_path") and job_data.get("words"):
+        # Extract transcript words for this specific sliced segment
+        clip_words = []
+        if job_data.get("words"):
+            for w in job_data["words"]:
+                ws = float(w.get("start", 0))
+                we = float(w.get("end", 0))
+                if we > start_f and ws < end_f:
+                    clip_words.append({
+                        **w,
+                        "start": max(0.0, ws - start_f),
+                        "end": max(0.1, we - start_f)
+                    })
+
+        # 1. Resolve Camera Framing / TV Director Trajectory UNCONDITIONALLY
+        traj = job_data.get("trajectory") or {}
+        if not traj.get("shot_timeline") and job_data.get("shot_timeline"):
+            traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
+
+        if not traj.get("shot_timeline") and not traj.get("layout"):
+            # Load saved CameraFramingConfig from HITL Camera Framing Studio
+            saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
+            if not saved_cfg:
+                saved_cfg = camera_framing.CameraFramingConfig.load(base)
+            if not saved_cfg and os.path.isfile(video_path):
+                try:
+                    saved_cfg = camera_framing.suggest_camera_zones(video_path)
+                    saved_cfg.save()
+                except Exception as e:
+                    logger.warning(f"[server] Auto camera framing suggestion failed: {e}")
+
+            if saved_cfg and saved_cfg.zones:
+                try:
+                    director = ollama_director.TVDirector(saved_cfg)
+                    shots = director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
+                    traj = {"layout": "director_multizone", "shot_timeline": shots}
+                except Exception as e:
+                    logger.warning(f"[server] Auto TV director fallback: {e}")
+                    if len(saved_cfg.zones) >= 2 or saved_cfg.split_preference == "split_stack":
+                        h_z = saved_cfg.get_host_zone() or saved_cfg.zones[0]
+                        g_z = saved_cfg.get_guest_zone() or saved_cfg.zones[1]
+                        traj = {
+                            "layout": "dual_speaker_split",
+                            "is_dual_speaker": True,
+                            "dual_speaker_layout": {
+                                "top_crop": {"x": h_z.x, "y": h_z.y, "w": h_z.width, "h": h_z.height},
+                                "bottom_crop": {"x": g_z.x, "y": g_z.y, "w": g_z.width, "h": g_z.height}
+                            }
+                        }
+                    else:
+                        traj = {"layout": "camera_zone", "zone": saved_cfg.zones[0].to_dict()}
+        job_data["trajectory"] = traj
+
+        # 2. Determine Subtitle Safe Placement and Generate ASS
+        is_dual = (
+            traj.get("layout") == "dual_speaker_split"
+            or bool(traj.get("is_dual_speaker", False))
+            or bool(traj.get("shot_timeline") and any(s.get("type") == "split_stack" for s in traj.get("shot_timeline", [])))
+        )
+        margin_v = int(job_data.get("margin_v") or (960 if is_dual else 580))
+
+        if not job_data.get("ass_path") and clip_words:
             try:
                 import caption_engine
                 ass_temp_file = os.path.join(TEMP_DIR, f"sub_{uuid.uuid4().hex[:8]}.ass")
-                clip_words = []
-                for w in job_data["words"]:
-                    ws = float(w.get("start", 0))
-                    we = float(w.get("end", 0))
-                    if we > start_f and ws < end_f:
-                        clip_words.append({
-                            **w,
-                            "start": max(0.0, ws - start_f),
-                            "end": max(0.1, we - start_f)
-                        })
-                if clip_words:
-                    traj = job_data.get("trajectory") or {}
-                    if not traj.get("shot_timeline") and job_data.get("shot_timeline"):
-                        traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
-                    elif not traj.get("shot_timeline") and not traj.get("layout"):
-                        saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
-                        if saved_cfg:
-                            try:
-                                director = ollama_director.TVDirector(saved_cfg)
-                                shots = director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
-                                traj = {"layout": "director_multizone", "shot_timeline": shots}
-                            except Exception as e:
-                                logger.warning(f"[server] Auto TV director fallback: {e}")
-                    job_data["trajectory"] = traj
-
-                    is_dual = (
-                        traj.get("layout") == "dual_speaker_split"
-                        or bool(traj.get("is_dual_speaker", False))
-                        or bool(traj.get("shot_timeline") and any(s.get("type") == "split_stack" for s in traj.get("shot_timeline", [])))
-                    )
-                    margin_v = 960 if is_dual else 580
-                    caption_engine.generate_karaoke_ass(clip_words, ass_temp_file, margin_v=margin_v)
+                caption_engine.generate_karaoke_ass(clip_words, ass_temp_file, margin_v=margin_v)
             except Exception as e:
                 logger.warning(f"[server] Failed to generate ASS karaoke: {e}")
 
@@ -469,13 +499,17 @@ def _run_render_job(job_data, **kwargs):
     output_path = os.path.join(OUTPUTS_DIR, output_filename)
     
     opts = RenderOptions(
-        speed=job_data.get("speed", 1.12),
+        speed=job_data.get("speed", 1.10),
         auto_adjust=job_data.get("auto_adjust", 0.0),
         auto_color_correct=job_data.get("auto_color_correct", 0.0)
     )
 
     final_ass_path = job_data.get("ass_path") or (ass_temp_file if ass_temp_file and os.path.isfile(ass_temp_file) else None)
     final_headline = hook_sentence if hook_sentence else job_data.get("headline_text")
+    if job_data.get("delete_title") or job_data.get("hide_title"):
+        final_headline = None
+    if job_data.get("title_y"):
+        text_coords["y"] = int(job_data["title_y"])
 
     try:
         render_clip(
@@ -493,7 +527,7 @@ def _run_render_job(job_data, **kwargs):
             headline_text=final_headline,
             brand_logo_path=job_data.get("brand_logo_path"),
             watermark_logo_path=job_data.get("watermark_logo_path"),
-            speed_factor=job_data.get("speed_factor", job_data.get("speed", 1.12)),
+            speed_factor=job_data.get("speed_factor", job_data.get("speed", 1.10)),
         )
     finally:
         if slice_temp_file and os.path.isfile(slice_temp_file):
@@ -1020,6 +1054,10 @@ def api_render_batch(req: BatchRenderRequest):
                 "headline_text": clip.get("hook_sentence", clip.get("title", "")),
                 "virality_score": clip.get("virality_score", 85),
                 "speed": req.speed,
+                "speed_factor": req.speed,
+                "title_y": clip.get("title_y", getattr(req, "title_y", 130)),
+                "margin_v": clip.get("margin_v", getattr(req, "margin_v", None)),
+                "delete_title": bool(clip.get("delete_title", False)),
                 "brand_logo_path": _resolve_logo_path(req.brand_logo),
                 "watermark_logo_path": _resolve_logo_path(req.watermark_logo),
                 "words": cached_words,

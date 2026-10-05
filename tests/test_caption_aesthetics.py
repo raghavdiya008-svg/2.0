@@ -123,5 +123,37 @@ class TestCaptionAesthetics(unittest.TestCase):
         self.assertFalse(os.path.exists(out_path))
 
 
+    def test_profanity_censoring_and_scunthorpe_protection(self):
+        """Verifies profanity is masked with asterisks while common English substrings are unharmed."""
+        # Profane words should be censored
+        self.assertEqual(caption_engine.censor_profanity("fuck"), "f***")
+        self.assertEqual(caption_engine.censor_profanity("fucking"), "f***")
+        self.assertEqual(caption_engine.censor_profanity("shit"), "sh*t")
+        self.assertEqual(caption_engine.censor_profanity("bitch"), "b***h")
+        self.assertEqual(caption_engine.censor_profanity("ass"), "a**")
+        self.assertEqual(caption_engine.censor_profanity("asshole"), "a**hole")
+
+        # Harmless words containing profanity substrings must NOT be censored
+        self.assertEqual(caption_engine.censor_profanity("classic"), "classic")
+        self.assertEqual(caption_engine.censor_profanity("assistant"), "assistant")
+        self.assertEqual(caption_engine.censor_profanity("assessment"), "assessment")
+        self.assertEqual(caption_engine.censor_profanity("passion"), "passion")
+        self.assertEqual(caption_engine.censor_profanity("class"), "class")
+
+        # In karaoke generation, censored text appears in ASS
+        out_path = os.path.join(self.temp_dir.name, "test_censor.ass")
+        words = [
+            {"word": "This", "start": 0.0, "end": 0.3},
+            {"word": "fucking", "start": 0.3, "end": 0.6},
+            {"word": "class", "start": 0.6, "end": 1.0},
+        ]
+        caption_engine.generate_karaoke_ass(words, out_path)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("f***", content)
+        self.assertIn("class", content)
+        self.assertNotIn("fucking", content)
+
+
 if __name__ == "__main__":
     unittest.main()
