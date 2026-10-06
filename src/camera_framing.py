@@ -297,7 +297,7 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
             source_width=sw,
             source_height=sh,
             mode="podcast",
-            split_preference="split_stack",
+            split_preference="wide",
             zones=[hz, gz, wz],
         )
 
@@ -378,7 +378,7 @@ def _build_default_podcast_config(file_name: str, sw: int, sh: int) -> CameraFra
         source_width=sw,
         source_height=sh,
         mode="podcast",
-        split_preference="split_stack",
+        split_preference="wide",
         zones=[
             CameraZone(
                 id="zone_host",

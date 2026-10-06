@@ -77,3 +77,16 @@ def test_timeline_coverage_zero_gaps(sample_config):
     assert shots[-1]["end"] == 20.0
     for k in range(len(shots) - 1):
         assert shots[k]["end"] == shots[k + 1]["start"], f"Gap detected between shot {k} and {k+1}"
+
+def test_undiarized_or_solo_dialogue_never_triggers_split_stack(sample_config):
+    director = TVDirector(sample_config, min_shot_duration=2.0)
+    # Words with no speaker tags (or all same speaker)
+    words = [
+        {"start": 0.0, "end": 5.0, "speaker": None, "word": "Talking about foundation models and AI."},
+        {"start": 5.1, "end": 12.0, "speaker": None, "word": "It should always remain on a single focal camera."}
+    ]
+    shots = director.direct_clip(words, clip_start=0.0, clip_end=15.0, use_ollama=False)
+    assert len(shots) == 1
+    assert shots[0]["type"] == "single"
+    assert shots[0]["camera"] == "zone_host"
+

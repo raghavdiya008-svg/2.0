@@ -473,37 +473,29 @@ def _run_render_job(job_data, **kwargs):
             traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
 
         if not traj.get("shot_timeline") and not traj.get("layout"):
-            # Load saved CameraFramingConfig from HITL Camera Framing Studio
+            # Check for explicitly saved HITL CameraFramingConfig
             saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
             if not saved_cfg:
                 saved_cfg = camera_framing.CameraFramingConfig.load(base)
-            if not saved_cfg and os.path.isfile(video_path):
-                try:
-                    saved_cfg = camera_framing.suggest_camera_zones(video_path)
-                    saved_cfg.save()
-                except Exception as e:
-                    logger.warning(f"[server] Auto camera framing suggestion failed: {e}")
 
-            if saved_cfg and saved_cfg.zones:
+            # If user explicitly configured multi-zone broadcast in the UI:
+            if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
                 try:
                     tv_director = director.TVDirector(saved_cfg)
                     shots = tv_director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
-                    traj = {"layout": "director_multizone", "shot_timeline": shots}
+                    if shots and any(s.get("type") == "split_stack" for s in shots):
+                        traj = {"layout": "director_multizone", "shot_timeline": shots}
                 except Exception as e:
                     logger.warning(f"[server] Auto TV director fallback: {e}")
-                    if len(saved_cfg.zones) >= 2 or saved_cfg.split_preference == "split_stack":
-                        h_z = saved_cfg.get_host_zone() or saved_cfg.zones[0]
-                        g_z = saved_cfg.get_guest_zone() or saved_cfg.zones[1]
-                        traj = {
-                            "layout": "dual_speaker_split",
-                            "is_dual_speaker": True,
-                            "dual_speaker_layout": {
-                                "top_crop": {"x": h_z.x, "y": h_z.y, "w": h_z.width, "h": h_z.height},
-                                "bottom_crop": {"x": g_z.x, "y": g_z.y, "w": g_z.width, "h": g_z.height}
-                            }
-                        }
-                    else:
-                        traj = {"layout": "camera_zone", "zone": saved_cfg.zones[0].to_dict()}
+
+            # If no multi-zone shots, execute AI vision face tracking (InsightFace SCRFD + SmoothGlide)
+            if not traj.get("shot_timeline") and not traj.get("layout"):
+                try:
+                    import engine_vision
+                    traj = engine_vision.calculate_tracking_trajectory(active_input_path)
+                except Exception as e:
+                    logger.warning(f"[server] engine_vision trajectory calculation failed: {e}")
+                    traj = {}
         job_data["trajectory"] = traj
 
         # 2. Determine Subtitle Safe Placement and Generate ASS

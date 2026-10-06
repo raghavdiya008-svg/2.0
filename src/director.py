@@ -284,29 +284,11 @@ Respond strictly with valid JSON."""
             if not is_filler:
                 cleaned_cues.append(cue)
 
-        # Check if cues have distinct speakers. If diarization is single or missing and mode is podcast with split_preference="split_stack",
-        # dynamically pace the dialogue: alternate between Host, Guest, and Split-Stack so multi-speaker videos don't stay frozen on a single face!
+        # Check if cues have distinct speakers. If diarization is single or missing,
+        # hold camera on the main speaker (single shot) — NEVER split-stack a solo speaker!
         distinct_speakers = {c.get("speaker") for c in cues if c.get("speaker")}
-        if (len(distinct_speakers) <= 1 or not distinct_speakers) and len(self.config.zones) >= 2:
-            if self.config.split_preference == "split_stack":
-                # For split-stack podcast preference, stack Host and Guest 9:8 split screen
-                return [{"start": 0.0, "end": clip_duration, "camera": "split", "type": "split_stack"}]
-            else:
-                # Alternate shots every 4-6 seconds based on sentence boundaries
-                dyn_shots = []
-                cur_cam = host_id
-                for c in cleaned_cues or cues:
-                    dyn_shots.append({
-                        "start": c["start"],
-                        "end": c["end"],
-                        "camera": cur_cam,
-                        "type": "single"
-                    })
-                    # Toggle camera between host and guest on sentence ends
-                    if c["end"] - c["start"] >= self.min_shot_duration:
-                        cur_cam = guest_id if cur_cam == host_id else host_id
-                if dyn_shots:
-                    return dyn_shots
+        if len(distinct_speakers) <= 1 or not distinct_speakers:
+            return [{"start": 0.0, "end": clip_duration, "camera": host_id, "type": "single"}]
 
         shots = []
         i = 0

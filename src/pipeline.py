@@ -602,17 +602,20 @@ def run_pipeline(
                         slice_words.append({**w, "start": proj_start, "end": proj_end})
 
             # Check if camera framing zones or multi-speaker director applies
+            # Check if camera framing zones or multi-speaker director applies
+            # Only delegate to TVDirector if trajectory is empty or dual-speaker presence was confirmed by vision
             traj_data = trajectory if isinstance(trajectory, dict) else {}
-            if not traj_data.get("shot_timeline"):
+            if not traj_data.get("shot_timeline") and (not traj_data.get("keyframes") or traj_data.get("is_dual_speaker")):
                 video_filename = os.path.basename(original_input_path)
                 saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
-                if saved_cfg and saved_cfg.zones:
+                if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
                     try:
                         print(f"[pipeline] Directing Hook #{idx} with Virtual TV Director ({len(saved_cfg.zones)} zones configured)...")
                         director_inst = director.TVDirector(saved_cfg)
                         shots = director_inst.direct_clip(slice_words, clip_start=0.0, clip_end=dur, use_ollama=False)
-                        trajectory = {"layout": "director_multizone", "shot_timeline": shots}
-                        traj_data = trajectory
+                        if shots and any(s.get("type") == "split_stack" for s in shots):
+                            trajectory = {"layout": "director_multizone", "shot_timeline": shots}
+                            traj_data = trajectory
                     except Exception as e:
                         print(f"[WARN] TVDirector direct_clip failed for Hook #{idx}: {e}")
 
