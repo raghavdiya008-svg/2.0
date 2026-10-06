@@ -23,11 +23,12 @@ def setup_kaggle_environment():
     print(f"Detecting Kaggle Environment: {is_kaggle}")
 
     # ── Pull latest code & bust stale .pyc cache ─────────────────────────────
-    print("\nPulling latest code from git...")
+    print("\nSyncing latest code from git...")
     try:
-        subprocess.run(["git", "pull", "--ff-only"], check=False)
+        subprocess.run(["git", "fetch", "origin", "main"], check=False)
+        subprocess.run(["git", "reset", "--hard", "origin/main"], check=False)
     except Exception as e:
-        print(f"git pull skipped (non-fatal): {e}")
+        print(f"git sync skipped (non-fatal): {e}")
 
     print("Clearing stale Python bytecode cache...")
     try:
@@ -59,14 +60,16 @@ def setup_kaggle_environment():
     ]
     
     if is_kaggle:
-        print("\nUpdating system packages (ffmpeg, libass, zstd, nodejs, npm)...")
-        try:
-            subprocess.run(["apt-get", "update", "-y", "-qq"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libass-dev", "zstd", "nodejs", "npm"], check=True)
-        except Exception as e:
-            print(f"Failed to update system packages: {e}")
-            
-        # System dependencies updated
+        import shutil
+        if not shutil.which("ffmpeg"):
+            print("\nFFmpeg not detected. Attempting package install...")
+            try:
+                subprocess.run(["apt-get", "update", "-y", "-qq"], check=False)
+                subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libass-dev"], check=False)
+            except Exception as e:
+                print(f"apt-get notice (non-fatal): {e}")
+        else:
+            print("\n  ✓ FFmpeg already installed in Kaggle environment.")
 
         print("\nChecking Kaggle GPU dependencies...")
         import_map = {
