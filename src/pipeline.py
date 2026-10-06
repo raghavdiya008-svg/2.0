@@ -429,14 +429,17 @@ def run_pipeline(
         # PHASE 3: Global Vision & Tracking (YOLO)
         # ====================================================================
         print("\n" + "=" * 60)
-        print("PHASE 3: Global Vision & Tracking (YOLO)")
+        print("PHASE 3: Global Vision & Tracking (InsightFace SCRFD / SmoothGlide)")
         print("=" * 60)
         _log_vram("Phase 3 start")
 
         try:
-            engine_vision._try_load_yolo()
+            if hasattr(engine_vision, "_try_load_insightface") and engine_vision._try_load_insightface():
+                pass
+            else:
+                engine_vision._try_load_yolo()
         except Exception as e:
-            print(f"[WARN] Failed to load YOLO: {e}")
+            print(f"[WARN] Failed to load vision detector: {e}")
 
         try:
             if hasattr(engine_vision, "detect_gaming_layout"):

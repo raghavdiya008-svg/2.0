@@ -50,9 +50,9 @@ When tackling multi-faceted tasks, split duties across these dedicated agent per
 - Configure local Ollama prompt to output JSON viral cuts[cite: 1].
 
 ### Phase 2: Active Speaker Tracking & Auto-Framing
-- Implement `YOLOv11` for bounding box detection[cite: 1].
-- Implement `TalkNet` / `MediaPipe` for active speaker lip-sync isolation[cite: 1].
-- Apply moving-average temporal smoothing for 9:16 camera panning[cite: 1].
+- Implement `InsightFace` (SCRFD) for facial detection and 5-point landmark keypoints[cite: 1].
+- Anchor camera framing to anatomical eye/nose landmark center (eliminating body gesture jitter)[cite: 1].
+- Apply `SmoothGlideTracker` (Kalman Filter + EWMA) for cinematic smooth panning, momentum coasting on subject exit, and gentle recentering[cite: 1].
 
 ### Phase 3: Visual Styling & Fabric.js Integration
 - Burn dynamic `.ass` karaoke captions via FFmpeg `libass`[cite: 1].

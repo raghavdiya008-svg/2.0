@@ -49,6 +49,8 @@ def setup_kaggle_environment():
     dependencies = [
         "whisperx",
         "faster-whisper",
+        "insightface",
+        "onnxruntime-gpu",
         "ultralytics",
         "mediapipe",
         "soundfile",
@@ -70,6 +72,8 @@ def setup_kaggle_environment():
         import_map = {
             "whisperx": "whisperx",
             "faster-whisper": "faster_whisper",
+            "insightface": "insightface",
+            "onnxruntime-gpu": "onnxruntime",
             "ultralytics": "ultralytics",
             "mediapipe": "mediapipe",
             "soundfile": "soundfile",
@@ -92,6 +96,7 @@ def setup_kaggle_environment():
         print("Using local mock / CPU fallbacks in source code.")
 
     # GPU Check
+    cuda_avail = False
     try:
         import torch
         cuda_avail = torch.cuda.is_available()
@@ -105,14 +110,15 @@ def setup_kaggle_environment():
         print("\nPyTorch not available in local environment.")
         print("WARNING: No GPU detected. Kaggle accelerator must be set to GPU T4 x2 or P100.")
 
-    print("\nEnsuring YOLO face model is downloaded...")
-    if not os.path.exists("yolo11n.pt"):
-        print("Downloading yolo11n.pt model...")
-        try:
-            from ultralytics import YOLO
-            YOLO("yolo11n.pt")
-        except Exception as e:
-            print(f"Failed to auto-download yolo11n.pt: {e}")
+    print("\nEnsuring InsightFace (SCRFD) detection models are initialized...")
+    try:
+        import insightface
+        from insightface.app import FaceAnalysis
+        app = FaceAnalysis(name='buffalo_sc', allowed_modules=['detection'])
+        app.prepare(ctx_id=0 if cuda_avail else -1, det_size=(640, 640))
+        print("  ✓ InsightFace SCRFD model ready.")
+    except Exception as e:
+        print(f"  InsightFace initialization notice: {e}")
 
 def main():
     import argparse

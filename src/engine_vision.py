@@ -4,20 +4,23 @@ src/engine_vision.py
 Phase 2 dynamic subject tracking and cinematic reframing engine.
 
 Detection pipeline:
-  - Primary:  ultralytics YOLOv11 ("yolo11n.pt") on GPU (device=0) with CPU fallback
-  - Fallback: center-frame static position (center_x = (w - TARGET_CROP_W) // 2)
+  - Primary:  InsightFace (SCRFD) with 5-point facial landmarks (buffalo_sc / buffalo_l)
+  - Secondary: Ultralytics YOLOv11 ("yolo11n.pt") on GPU with CPU fallback
+  - Fallback: OpenCV Haar Cascade / center-frame static position
 
-Smoothing:
-  Exponential temporal filter (alpha=0.15) for butter-smooth pans.
-  smoothed_x[i] = alpha * raw_x[i] + (1 - alpha) * smoothed_x[i-1]
+Smoothing & Framing:
+  - SmoothGlideTracker: 1D Kalman Filter (Position + Velocity) with EWMA smoothing,
+    deadband suppression, momentum coasting on subject exit, and gentle centering glide.
+  - Anchors strictly to the anatomical eye/nose landmark center rather than jittery torso boxes.
 
 Zoom keyframes:
-  Detects high-motion segments and injects subtle zoom pulses (1.0x → 1.12x)
-  every 4–6 seconds to reset viewer attention.
+  - Detects high-motion segments and injects subtle zoom pulses (1.0x → 1.12x)
+    every 4–6 seconds to reset viewer attention.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import gc
 import logging
 import os
@@ -53,21 +56,128 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_BASE_DIR, ".."))
 
 
 # ---------------------------------------------------------------------------
-# YOLO loader (lazy, guarded, GPU with CPU fallback)
+# Data Structures
 # ---------------------------------------------------------------------------
-_yolo_model = None
-_yolo_available = False
-_yolo_device: str | int = "cpu"
+@dataclass
+class FaceDetection:
+    """
+    Rich face detection record produced by InsightFace SCRFD.
+    Contains bounding box (x, y, w, h), 5-point facial landmarks,
+    and anatomically stabilized eye/nose landmark focal center.
+    """
+    box: Tuple[int, int, int, int]           # (x, y, w, h)
+    landmarks: Optional[np.ndarray] = None   # 5x2 array: [[eye_l_x, eye_l_y], [eye_r_x, eye_r_y], [nose_x, nose_y], ...]
+    landmark_center: Optional[Tuple[float, float]] = None  # (focal_x, focal_y)
+    score: float = 1.0
+
+    @property
+    def x(self) -> int:
+        return self.box[0]
+
+    @property
+    def y(self) -> int:
+        return self.box[1]
+
+    @property
+    def w(self) -> int:
+        return self.box[2]
+
+    @property
+    def h(self) -> int:
+        return self.box[3]
+
+
+# ---------------------------------------------------------------------------
+# InsightFace (SCRFD) loader (GPU CUDA with CPU fallback)
+# ---------------------------------------------------------------------------
+_insightface_app = None
+_insightface_available = False
+_insightface_device = "cpu"
 
 
 def _get_device() -> str | int:
     """Returns 0 if GPU (CUDA) is available, else 'cpu'."""
     try:
-        if torch.cuda.is_available():
+        if torch is not None and torch.cuda.is_available():
             return 0
     except Exception:
         pass
     return "cpu"
+
+
+def _try_load_insightface() -> bool:
+    """
+    Attempts to load InsightFace (SCRFD) model configured for GPU if available, else CPU.
+    Loads lightweight 'buffalo_sc' or 'buffalo_l' with detection-only module for maximal inference speed.
+    """
+    global _insightface_app, _insightface_available, _insightface_device
+    if _insightface_available and _insightface_app is not None:
+        return True
+    try:
+        import insightface
+        from insightface.app import FaceAnalysis
+
+        use_cuda = False
+        try:
+            if torch is not None and torch.cuda.is_available():
+                use_cuda = True
+        except Exception:
+            pass
+
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if use_cuda else ['CPUExecutionProvider']
+        ctx_id = 0 if use_cuda else -1
+
+        app = None
+        for model_name in ["buffalo_sc", "buffalo_l"]:
+            try:
+                app = FaceAnalysis(name=model_name, allowed_modules=['detection'], providers=providers)
+                app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+                break
+            except Exception as model_err:
+                logger.debug(f"[engine_vision] Could not load InsightFace model {model_name}: {model_err}")
+                app = None
+
+        if app is None:
+            app = FaceAnalysis(allowed_modules=['detection'], providers=providers)
+            app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+
+        _insightface_app = app
+        _insightface_available = True
+        _insightface_device = "cuda" if use_cuda else "cpu"
+        logger.info(f"[engine_vision] Loaded InsightFace SCRFD on {_insightface_device}")
+        return True
+    except Exception as e:
+        logger.debug(f"[engine_vision] InsightFace SCRFD unavailable in current environment: {e}")
+        _insightface_app = None
+        _insightface_available = False
+        return False
+
+
+def purge_insightface_model() -> None:
+    """Explicitly deletes the cached InsightFace model from memory."""
+    global _insightface_app, _insightface_available
+    if _insightface_app is not None:
+        try:
+            del _insightface_app
+        except Exception:
+            pass
+        _insightface_app = None
+        _insightface_available = False
+    gc.collect()
+    try:
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    logger.debug("[engine_vision] Purged InsightFace model from VRAM.")
+
+
+# ---------------------------------------------------------------------------
+# YOLO loader (Secondary / Legacy fallback)
+# ---------------------------------------------------------------------------
+_yolo_model = None
+_yolo_available = False
+_yolo_device: str | int = "cpu"
 
 
 def _try_load_yolo() -> bool:
@@ -96,7 +206,7 @@ def _try_load_yolo() -> bool:
         _yolo_available = True
         return True
     except Exception as e:
-        print(f"[engine_vision] Warning: Could not load YOLOv11 model: {e}")
+        logger.debug(f"[engine_vision] YOLO fallback unavailable: {e}")
         _yolo_model = None
         _yolo_available = False
         return False
@@ -104,10 +214,11 @@ def _try_load_yolo() -> bool:
 
 def purge_yolo_model() -> None:
     """
-    Explicitly deletes the cached YOLO model from memory and flushes PyTorch CUDA cache.
+    Explicitly deletes the cached vision models from memory and flushes PyTorch CUDA cache.
     Prevents VRAM leaks before launching FFmpeg NVENC.
     """
     global _yolo_model, _yolo_available
+    purge_insightface_model()
     if _yolo_model is not None:
         try:
             del _yolo_model
@@ -118,13 +229,14 @@ def purge_yolo_model() -> None:
 
     gc.collect()
     try:
-        if torch.cuda.is_available():
+        if torch is not None and torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception:
         pass
-    logger.debug("[engine_vision] Purged YOLO model from VRAM.")
+    logger.debug("[engine_vision] Purged vision models from VRAM.")
 
 
+purge_vision_models = purge_yolo_model
 evict_yolo_model = purge_yolo_model
 
 
@@ -132,9 +244,55 @@ evict_yolo_model = purge_yolo_model
 # Core detection helpers
 # ---------------------------------------------------------------------------
 
+def _detect_insightface(frame: np.ndarray) -> List[FaceDetection]:
+    """
+    Runs InsightFace SCRFD on a frame.
+    Extracts bounding boxes and 5 facial landmarks (eyes, nose, mouth corners).
+    Calculates stable eye/nose anatomical focal center.
+    """
+    if not _insightface_available or _insightface_app is None:
+        return []
+    try:
+        faces = _insightface_app.get(frame)
+        results: List[FaceDetection] = []
+        for face in faces:
+            bbox = face.bbox
+            x1, y1, x2, y2 = map(int, bbox[:4])
+            w = max(1, x2 - x1)
+            h = max(1, y2 - y1)
+            score = float(face.det_score) if hasattr(face, "det_score") else 1.0
+
+            kps = face.kps if hasattr(face, "kps") and face.kps is not None else None
+            if kps is not None and len(kps) >= 3:
+                # Landmark anchors:
+                # kps[0] = left eye, kps[1] = right eye, kps[2] = nose
+                eye_l = kps[0]
+                eye_r = kps[1]
+                nose = kps[2]
+                eye_mid_x = (float(eye_l[0]) + float(eye_r[0])) / 2.0
+                eye_mid_y = (float(eye_l[1]) + float(eye_r[1])) / 2.0
+                # Weighted center: 50% eye midpoint + 50% nose for horizontal anchor
+                focal_x = 0.5 * eye_mid_x + 0.5 * float(nose[0])
+                focal_y = 0.4 * eye_mid_y + 0.6 * float(nose[1])
+            else:
+                focal_x = float(x1 + w / 2.0)
+                focal_y = float(y1 + h * 0.38)
+
+            results.append(FaceDetection(
+                box=(x1, y1, w, h),
+                landmarks=kps,
+                landmark_center=(focal_x, focal_y),
+                score=score
+            ))
+        return results
+    except Exception as e:
+        logger.debug(f"[engine_vision] InsightFace inference error: {e}")
+        return []
+
+
 def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """
-    Runs YOLOv11 on a frame.
+    Runs YOLO on a frame.
     Returns list of (x, y, w, h) bounding boxes for detected humans (person class 0).
     """
     if not _yolo_available or _yolo_model is None:
@@ -148,7 +306,6 @@ def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
                 boxes.append((x1, y1, x2 - x1, y2 - y1))
         return boxes
     except Exception:
-        # If GPU inference fails at runtime, gracefully fallback to CPU
         if _yolo_device != "cpu":
             try:
                 results = _yolo_model(frame, device="cpu", classes=[0], verbose=False)
@@ -163,13 +320,63 @@ def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
         return []
 
 
+def detect_faces_or_subjects(frame: np.ndarray, prefer_insightface: bool = True) -> List[FaceDetection]:
+    """
+    Detects faces/human subjects in a video frame.
+    Primary: InsightFace SCRFD with eye/nose landmarks.
+    Fallback: YOLOv11 person detection -> Haar Cascade -> empty.
+    """
+    if prefer_insightface and _try_load_insightface():
+        faces = _detect_insightface(frame)
+        if faces:
+            return faces
+
+    # Fallback 1: YOLO
+    if _try_load_yolo():
+        yolo_boxes = _detect_yolo(frame)
+        if yolo_boxes:
+            return [
+                FaceDetection(
+                    box=b,
+                    landmarks=None,
+                    landmark_center=(float(b[0] + b[2] / 2.0), float(b[1] + b[3] * 0.35)),
+                    score=0.9
+                )
+                for b in yolo_boxes
+            ]
+
+    # Fallback 2: OpenCV Haar Cascade
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        if os.path.isfile(cascade_path):
+            face_cascade = cv2.CascadeClassifier(cascade_path)
+            haar_faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 40))
+            if len(haar_faces) > 0:
+                return [
+                    FaceDetection(
+                        box=(int(x), int(y), int(w), int(h)),
+                        landmarks=None,
+                        landmark_center=(float(x + w / 2.0), float(y + h * 0.4)),
+                        score=0.8
+                    )
+                    for (x, y, w, h) in haar_faces
+                ]
+    except Exception:
+        pass
+
+    return []
+
+
 def detect_subjects(frame: np.ndarray, use_yolo: bool = True) -> List[Tuple[int, int, int, int]]:
     """
-    Detects human subjects in a video frame using YOLOv11.
-    Returns list of (x, y, w, h) bounding boxes. Empty list = no human detections.
+    Detects faces/human subjects in a video frame.
+    Uses InsightFace SCRFD as primary detector, falling back to YOLO or Haar.
+    Returns list of (x, y, w, h) bounding boxes.
     """
-    if use_yolo and _try_load_yolo():
-        return _detect_yolo(frame)
+    detections = detect_faces_or_subjects(frame)
+    if detections:
+        return [d.box for d in detections]
     return []
 
 
@@ -242,40 +449,207 @@ def detect_scene_cuts(
 # ---------------------------------------------------------------------------
 
 def calculate_pan_offset(
-    detections: List[Tuple[int, int, int, int]],
+    detections: List[Any],
     source_w: int,
     target_crop_w: int = TARGET_CROP_W,
-    focal_box: Optional[Tuple[int, int, int, int]] = None
+    focal_box: Optional[Tuple[int, int, int, int]] = None,
+    focal_center_x: Optional[float] = None,
 ) -> int:
     """
     Calculates the horizontal x_offset to frame the focal subject
     inside a `target_crop_w` wide vertical crop window.
 
-    If no detections (no humans found, e.g. POV gaming footage) → returns center offset:
-        center_x = (source_w - target_crop_w) // 2
-    If multiple detections → uses the focal_box if provided, else largest bounding box.
-
+    Supports direct focal_center_x (from eye/nose landmarks) or focal_box.
     Returns: x_offset (clamped to [0, max(0, source_w - target_crop_w)])
     """
     max_x = max(0, source_w - target_crop_w)
     center_x = max(0, (source_w - target_crop_w) // 2)
 
+    # 1. Direct facial landmark anchor center
+    if focal_center_x is not None:
+        x_offset = int(round(focal_center_x - target_crop_w / 2.0))
+        return max(0, min(x_offset, max_x))
+
     if not detections and not focal_box:
         return center_x  # Safe center-crop fallback
 
     if focal_box:
-        focal = focal_box
+        fx, fy, fw, fh = focal_box[:4]
     else:
-        # Pick the largest box (most prominent subject)
-        focal = max(detections, key=lambda b: b[2] * b[3])
-        
-    fx, fy, fw, fh = focal
+        # Check if detections are FaceDetection objects or raw tuples
+        if detections and hasattr(detections[0], "box"):
+            focal_obj = max(detections, key=lambda d: d.box[2] * d.box[3])
+            if focal_obj.landmark_center is not None:
+                x_offset = int(round(focal_obj.landmark_center[0] - target_crop_w / 2.0))
+                return max(0, min(x_offset, max_x))
+            fx, fy, fw, fh = focal_obj.box
+        else:
+            fx, fy, fw, fh = max(detections, key=lambda b: b[2] * b[3])[:4]
 
     # Center the crop window on the focal subject's horizontal midpoint
     subject_center_x = fx + fw // 2
     x_offset = subject_center_x - target_crop_w // 2
 
     return max(0, min(x_offset, max_x))
+
+
+# ---------------------------------------------------------------------------
+# Smooth-Glide Kalman Filter + EWMA Tracker
+# ---------------------------------------------------------------------------
+
+class SmoothGlideTracker:
+    """
+    Combines a 1D Kalman Filter (Position + Velocity state) with EWMA smoothing
+    to create a cinematic, smooth-glide camera tracking experience.
+
+    Key Features:
+    1. Landmark-anchored tracking:
+       Locks to the eye/nose landmark center rather than shifting torso boxes.
+    2. Deadband threshold:
+       Suppresses micro-jitter from head gestures or speaking cadence.
+    3. Smooth-glide momentum:
+       When a subject temporarily steps out of view or turns away, the camera
+       does not snap. It coasts with damped momentum.
+    4. Gentle centering glide:
+       If the subject steps out for prolonged duration (>1.5s), the camera
+       gently glides back towards neutral center at a controlled cruising velocity.
+    5. Velocity clamping:
+       Restricts maximum pan speed to prevent dizzying whip-pans.
+    6. Instant scene-cut reset:
+       Precludes moving-average drag across shot transitions.
+    """
+
+    def __init__(
+        self,
+        source_w: int,
+        target_crop_w: int = TARGET_CROP_W,
+        dt: float = 1.0,
+        process_noise: float = 3.0,
+        measurement_noise: float = 15.0,
+        ewma_alpha: float = 0.18,
+        deadband: float = 16.0,
+        max_velocity: float = 180.0,
+    ):
+        self.source_w = source_w
+        self.target_crop_w = target_crop_w
+        self.max_x = max(0, source_w - target_crop_w)
+        self.neutral_x = self.max_x // 2
+        self.dt = dt
+        self.alpha = ewma_alpha
+        self.deadband = deadband
+        self.max_v = max_velocity
+
+        self.x = float(self.neutral_x)
+        self.v = 0.0
+        self.p00 = 100.0
+        self.p01 = 0.0
+        self.p10 = 0.0
+        self.p11 = 50.0
+
+        self.q_pos = process_noise
+        self.q_vel = process_noise * 2.0
+        self.r = measurement_noise
+
+        self.smoothed_x = float(self.neutral_x)
+        self.frames_without_detection = 0
+        self.initialized = False
+
+    def reset(self, new_x: Optional[float] = None) -> None:
+        """Resets tracker state instantaneously for scene cuts."""
+        reset_pos = new_x if new_x is not None else float(self.neutral_x)
+        reset_pos = max(0.0, min(float(self.max_x), float(reset_pos)))
+        self.x = reset_pos
+        self.v = 0.0
+        self.p00 = 50.0
+        self.p01 = 0.0
+        self.p10 = 0.0
+        self.p11 = 20.0
+        self.smoothed_x = reset_pos
+        self.frames_without_detection = 0
+        self.initialized = True
+
+    def update(self, target_pan_x: Optional[float], dt: Optional[float] = None) -> int:
+        """
+        Updates tracker state and returns smooth clamped integer pan offset.
+        target_pan_x: Desired pan offset from eye/nose landmark center (None if no detection).
+        """
+        step = dt if dt is not None and dt > 0 else self.dt
+
+        if not self.initialized:
+            start_x = target_pan_x if target_pan_x is not None else self.neutral_x
+            self.reset(start_x)
+            return int(round(self.smoothed_x))
+
+        # 1. Kalman Predict Step
+        x_pred = self.x + self.v * step
+        v_pred = self.v
+
+        p00_pred = self.p00 + step * (self.p10 + self.p01) + (step ** 2) * self.p11 + self.q_pos
+        p01_pred = self.p01 + step * self.p11
+        p10_pred = self.p10 + step * self.p11
+        p11_pred = self.p11 + self.q_vel
+
+        # 2. Measurement Update or Missing Subject Smooth-Glide
+        if target_pan_x is not None:
+            self.frames_without_detection = 0
+            meas_x = max(0.0, min(float(self.max_x), float(target_pan_x)))
+
+            # Deadband check: if within deadband of current position, suppress jitter
+            if abs(meas_x - self.x) < self.deadband:
+                meas_x = self.x
+
+            # Kalman gain
+            s = p00_pred + self.r
+            k0 = p00_pred / max(1e-4, s)
+            k1 = p10_pred / max(1e-4, s)
+
+            # State update
+            y = meas_x - x_pred
+            self.x = x_pred + k0 * y
+            self.v = v_pred + k1 * y
+
+            # Covariance update
+            self.p00 = p00_pred * (1.0 - k0)
+            self.p01 = p01_pred * (1.0 - k0)
+            self.p10 = -k1 * p00_pred + p10_pred
+            self.p11 = -k1 * p01_pred + p11_pred
+
+        else:
+            # Subject stepped out of view or undetected
+            self.frames_without_detection += 1
+
+            if self.frames_without_detection <= 2:
+                # Brief absence (step out or turn around): coast with decaying momentum
+                self.v *= 0.70
+                self.x = x_pred
+            else:
+                # Prolonged absence: gracefully glide towards neutral center
+                dist_to_center = self.neutral_x - self.x
+                glide_dir = 1.0 if dist_to_center > 0 else -1.0
+                glide_speed = min(45.0, abs(dist_to_center) * 0.35)
+                self.v = glide_dir * glide_speed
+                self.x += self.v * step
+                if abs(self.neutral_x - self.x) < 4.0:
+                    self.x = float(self.neutral_x)
+                    self.v = 0.0
+
+            self.p00 = p00_pred
+            self.p01 = p01_pred
+            self.p10 = p10_pred
+            self.p11 = p11_pred
+
+        # Clamp velocity
+        self.v = max(-self.max_v, min(self.max_v, self.v))
+
+        # Clamp position
+        self.x = max(0.0, min(float(self.max_x), self.x))
+
+        # 3. EWMA Smoothing
+        self.smoothed_x = self.alpha * self.x + (1.0 - self.alpha) * self.smoothed_x
+        self.smoothed_x = max(0.0, min(float(self.max_x), self.smoothed_x))
+
+        return int(round(self.smoothed_x))
+
 
 
 # ---------------------------------------------------------------------------
@@ -905,11 +1279,17 @@ def calculate_tracking_trajectory(
 
     cap = cv2.VideoCapture(video_path)
     frame_idx = 0
-    yolo_checked = use_yolo
     has_any_detection = False
     
     speaker_to_box_idx: Dict[str, int] = {}
-    prev_gray: Optional[np.ndarray] = None
+    tracker = SmoothGlideTracker(
+        source_w=source_w,
+        target_crop_w=target_crop_w,
+        dt=sample_step,
+        ewma_alpha=alpha,
+        deadband=16.0,
+        max_velocity=180.0,
+    )
 
     while True:
         ret, frame = cap.read()
@@ -922,7 +1302,8 @@ def calculate_tracking_trajectory(
             orig_t = timestamp + slice_start_time
 
             # Reset speaker-to-box mapping on scene cut transition frame
-            if frame_idx in cut_frame_indices and any(abs(timestamp - c) <= 1.0 / fps for c in clean_cuts):
+            is_scene_cut_frame = frame_idx in cut_frame_indices and any(abs(timestamp - c) <= 1.0 / fps for c in clean_cuts)
+            if is_scene_cut_frame:
                 speaker_to_box_idx.clear()
             
             active_speaker = None
@@ -944,48 +1325,62 @@ def calculate_tracking_trajectory(
             else:
                 small = frame
 
-            detections = detect_subjects(small, use_yolo=yolo_checked)
-            if detections:
+            # Primary: InsightFace SCRFD with eye/nose landmarks (falls back gracefully if uninstalled)
+            face_detections = detect_faces_or_subjects(small, prefer_insightface=True)
+            if face_detections:
                 has_any_detection = True
 
-            # Scale detection boxes back to source coordinate space
-            if scale < 1.0 and detections:
+            # Scale detection boxes and landmark centers back to source coordinate space
+            if scale < 1.0 and face_detections:
                 inv = 1.0 / max(scale, 1e-4)
-                detections = [
-                    (int(x * inv), int(y * inv), int(bw * inv), int(bh * inv))
-                    for x, y, bw, bh in detections
-                ]
+                scaled_detections = []
+                for fd in face_detections:
+                    bx, by, bw, bh = fd.box
+                    sb = (int(bx * inv), int(by * inv), int(bw * inv), int(bh * inv))
+                    sc = (fd.landmark_center[0] * inv, fd.landmark_center[1] * inv) if fd.landmark_center else None
+                    scaled_detections.append(FaceDetection(box=sb, landmarks=None, landmark_center=sc, score=fd.score))
+                face_detections = scaled_detections
 
-            all_frame_detections.append((timestamp, list(detections)))
-            curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            all_frame_detections.append((timestamp, [fd.box for fd in face_detections]))
                 
-            focal_box = None
-            if detections:
-                if len(detections) >= 2:
+            focal_face = None
+            if face_detections:
+                if len(face_detections) >= 2:
                     # Sort detections left to right across the canvas
-                    detections.sort(key=lambda b: b[0])
+                    face_detections.sort(key=lambda d: d.box[0])
                     
                     if active_speaker:
-                        # Check if this speaker already has a bound box index
-                        if active_speaker in speaker_to_box_idx and speaker_to_box_idx[active_speaker] < len(detections):
-                            focal_box = detections[speaker_to_box_idx[active_speaker]]
+                        if active_speaker in speaker_to_box_idx and speaker_to_box_idx[active_speaker] < len(face_detections):
+                            focal_face = face_detections[speaker_to_box_idx[active_speaker]]
                         else:
-                            # Map by order of known speaker appearances in diarization
                             known_speakers = list(dict.fromkeys(seg["speaker"] for seg in (speaker_segments or []) if seg.get("speaker")))
                             if active_speaker in known_speakers:
-                                spk_idx = known_speakers.index(active_speaker) % len(detections)
+                                spk_idx = known_speakers.index(active_speaker) % len(face_detections)
                                 speaker_to_box_idx[active_speaker] = spk_idx
-                                focal_box = detections[spk_idx]
+                                focal_face = face_detections[spk_idx]
 
-                    # If no active speaker or mapping could not be established, select primary foreground subject
-                    if focal_box is None:
-                        focal_box = max(detections, key=lambda b: b[2] * b[3])
+                    if focal_face is None:
+                        focal_face = max(face_detections, key=lambda d: d.box[2] * d.box[3])
                 else:
-                    focal_box = detections[0]
+                    focal_face = face_detections[0]
 
-            prev_gray = curr_gray
+            # Calculate desired pan offset anchored to eye/nose landmark center (or None if subject stepped out)
+            if focal_face is not None:
+                if focal_face.landmark_center is not None:
+                    target_pan_x = focal_face.landmark_center[0] - target_crop_w / 2.0
+                else:
+                    target_pan_x = (focal_face.box[0] + focal_face.box[2] / 2.0) - target_crop_w / 2.0
+            else:
+                target_pan_x = None  # Subject stepped out / out of view
 
-            x_offset = calculate_pan_offset(detections, source_w, target_crop_w, focal_box=focal_box)
+            # Instantaneous reset on hard scene cuts to prevent camera drag across shots
+            if is_scene_cut_frame:
+                tracker.reset(target_pan_x)
+
+            # Smooth glide update: Kalman Filter predict + update with momentum coasting & gentle centering
+            dt_step = (timestamp - sample_timestamps[-1]) if sample_timestamps else sample_step
+            x_offset = tracker.update(target_pan_x, dt=dt_step)
+
             raw_x_offsets.append(x_offset)
             sample_timestamps.append(round(timestamp, 4))
 

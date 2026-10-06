@@ -227,16 +227,16 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
     if not ret or frame is None:
         return _build_default_podcast_config(file_name, sw, sh)
 
-    # Detect human subjects via engine_vision if available
-    detected_boxes: List[Tuple[int, int, int, int]] = []
+    # Detect human subjects/faces via engine_vision (InsightFace SCRFD primary)
+    face_detections: List[Any] = []
     try:
-        from engine_vision import detect_subjects
-        detected_boxes = detect_subjects(frame, use_yolo=True)
+        from engine_vision import detect_faces_or_subjects
+        face_detections = detect_faces_or_subjects(frame, prefer_insightface=True)
     except Exception as e:
-        logger.debug(f"[camera_framing] YOLO subject detection fallback: {e}")
+        logger.debug(f"[camera_framing] InsightFace/vision detection fallback: {e}")
 
-    # Fallback to Haar Cascade if YOLO produced 0 boxes
-    if not detected_boxes:
+    # Fallback to Haar Cascade if 0 faces found
+    if not face_detections:
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -244,25 +244,42 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
                 face_cascade = cv2.CascadeClassifier(cascade_path)
                 faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
                 for (x, y, w, h) in faces:
-                    detected_boxes.append((int(x), int(y), int(w), int(h)))
+                    from engine_vision import FaceDetection
+                    face_detections.append(FaceDetection(
+                        box=(int(x), int(y), int(w), int(h)),
+                        landmark_center=(float(x + w / 2.0), float(y + h * 0.4))
+                    ))
         except Exception as e:
             logger.debug(f"[camera_framing] Haar detection error: {e}")
 
-    # Filter out tiny spurious detections (less than 5% frame height)
+    # Filter out tiny spurious detections (less than 8% frame height)
     min_h = int(sh * 0.08)
-    valid_boxes = [b for b in detected_boxes if b[3] >= min_h]
+    valid_faces = [f for f in face_detections if f.box[3] >= min_h]
 
     # Cluster detections if multiple
-    if len(valid_boxes) >= 2:
-        # Sort left to right by x center
-        valid_boxes.sort(key=lambda b: b[0] + b[2] / 2.0)
-        box1 = valid_boxes[0]
-        box2 = valid_boxes[-1]
+    if len(valid_faces) >= 2:
+        # Sort left to right by landmark center x (or box x center)
+        def _get_cx(f: Any) -> float:
+            if getattr(f, "landmark_center", None) is not None:
+                return f.landmark_center[0]
+            return f.box[0] + f.box[2] / 2.0
+
+        valid_faces.sort(key=_get_cx)
+        f1 = valid_faces[0]
+        f2 = valid_faces[-1]
 
         # Host Zone (Left)
-        hz = _box_to_zone("zone_host", "Host (Left)", box1, sw, sh, speaker="SPEAKER_00", color="#3b82f6")
+        hz = _box_to_zone(
+            "zone_host", "Host (Left)", f1.box, sw, sh,
+            speaker="SPEAKER_00", color="#3b82f6",
+            landmark_center=getattr(f1, "landmark_center", None)
+        )
         # Guest Zone (Right)
-        gz = _box_to_zone("zone_guest", "Guest (Right)", box2, sw, sh, speaker="SPEAKER_01", color="#10b981")
+        gz = _box_to_zone(
+            "zone_guest", "Guest (Right)", f2.box, sw, sh,
+            speaker="SPEAKER_01", color="#10b981",
+            landmark_center=getattr(f2, "landmark_center", None)
+        )
         # Wide Zone (Spans both)
         wz = CameraZone(
             id="zone_wide",
@@ -284,9 +301,14 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
             zones=[hz, gz, wz],
         )
 
-    elif len(valid_boxes) == 1:
+    elif len(valid_faces) == 1:
         # Solo speaker
-        hz = _box_to_zone("zone_host", "Solo Speaker", valid_boxes[0], sw, sh, speaker="SPEAKER_00", color="#3b82f6")
+        f0 = valid_faces[0]
+        hz = _box_to_zone(
+            "zone_host", "Solo Speaker", f0.box, sw, sh,
+            speaker="SPEAKER_00", color="#3b82f6",
+            landmark_center=getattr(f0, "landmark_center", None)
+        )
         wz = CameraZone(
             id="zone_wide",
             label="Full Wide Shot",
@@ -317,18 +339,22 @@ def _box_to_zone(
     sw: int,
     sh: int,
     speaker: Optional[str] = None,
-    color: str = "#3b82f6"
+    color: str = "#3b82f6",
+    landmark_center: Optional[Tuple[float, float]] = None,
 ) -> CameraZone:
-    """Expands a face/subject bounding box into a pleasant vertical or 9:8 camera framing zone."""
+    """Expands a face/subject bounding box or landmark center into a pleasant vertical or 9:8 camera framing zone."""
     bx, by, bw, bh = box
-    cx = bx + bw / 2.0
-    cy = by + bh / 2.0
+    if landmark_center is not None:
+        cx, cy = landmark_center
+    else:
+        cx = bx + bw / 2.0
+        cy = by + bh / 2.0
 
-    # Desired framing width is ~0.45 of source video width or expanded bounding box
+    # Desired framing width is ~0.42 of source video width or expanded bounding box
     target_w = max(int(sw * 0.42), int(bw * 1.8))
     target_h = max(int(sh * 0.85), int(bh * 2.2))
 
-    # Clamp to frame
+    # Clamp to frame, anchoring on anatomical eye/nose center
     x1 = max(0, min(sw - target_w, int(cx - target_w / 2.0)))
     y1 = max(0, min(sh - target_h, int(cy - target_h * 0.35)))
 
