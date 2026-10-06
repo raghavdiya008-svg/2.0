@@ -176,7 +176,12 @@ def _ass_header(
         # Bold  Italic Underline StrikeOut ScaleX ScaleY Spacing Angle
         f"-1,0,0,0,100,100,1,0,"
         # BorderStyle Outline Shadow Alignment MarginL MarginR MarginV Encoding
-        f"1,4.5,3,2,{MARGIN_LR},{MARGIN_LR},{margin_v},1"
+        f"1,4.5,3,2,{MARGIN_LR},{MARGIN_LR},{margin_v},1\n"
+        # Secondary style for 9:8 split-screen seam placement (y=960 center seam)
+        f"Style: SeamCenter,{safe_font},{font_size},"
+        f"{primary_color},{secondary_color},{outline_color},{back_color},"
+        f"-1,0,0,0,100,100,1,0,"
+        f"1,4.5,3,2,{MARGIN_LR},{MARGIN_LR},960,1"
     )
     return (
         "[Script Info]\n"
@@ -212,6 +217,7 @@ def generate_karaoke_ass(
     max_words_per_line: int = 3,
     max_chars_per_line: int = 24,
     gap_threshold_sec: float = 0.45,
+    shot_timeline: Optional[List[Dict[str, Any]]] = None,
     **kwargs,
 ) -> Optional[str]:
     """
@@ -365,8 +371,20 @@ def generate_karaoke_ass(
                 t_cursor = w_end
 
             karaoke_str = "".join(karaoke_parts).rstrip()
+
+            # Dynamic style selection: if line midpoint falls in a split_stack shot, use SeamCenter (y=960 seam)
+            # otherwise use Default (y=580 lower third)
+            line_style = "Default"
+            if shot_timeline:
+                mid_t = (line_start + line_end) / 2.0
+                for s in shot_timeline:
+                    if s.get("start", 0.0) <= mid_t <= s.get("end", 999999.0):
+                        if s.get("type") == "split_stack":
+                            line_style = "SeamCenter"
+                        break
+
             f.write(
-                f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{karaoke_str}\n"
+                f"Dialogue: 0,{start_str},{end_str},{line_style},,0,0,0,,{karaoke_str}\n"
             )
 
     return output_ass_path

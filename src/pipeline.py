@@ -620,17 +620,18 @@ def run_pipeline(
                 print(f"[WARNING] Hook #{idx}: 0 words after ASR — no subtitle overlay.")
 
             slice_ass_path = os.path.join(temp_dir, f"slice_{idx}.ass")
-            is_dual = bool(
+            shot_tl = traj_data.get("shot_timeline")
+            is_pure_dual = bool(
                 traj_data.get("is_dual_speaker", False)
-                or traj_data.get("layout") == "dual_speaker_split"
-                or (traj_data.get("shot_timeline") and any(s.get("type") == "split_stack" for s in traj_data.get("shot_timeline", [])))
+                and traj_data.get("layout") == "dual_speaker_split"
             )
-            ass_margin_v = 960 if is_dual else caption_engine.MARGIN_V
+            ass_margin_v = 960 if is_pure_dual else caption_engine.MARGIN_V
 
             ass_path = caption_engine.generate_karaoke_ass(
                 words=slice_words,
                 output_ass_path=slice_ass_path,
                 margin_v=ass_margin_v,
+                shot_timeline=shot_tl,
             )
             if not (ass_path and os.path.isfile(ass_path)):
                 ass_path = None
