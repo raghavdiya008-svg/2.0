@@ -131,6 +131,41 @@ class TestInsightFaceSmoothGlide(unittest.TestCase):
         self.assertEqual(tracker.smoothed_x, 700.0)
         self.assertEqual(tracker.v, 0.0)
 
+    def test_detect_multispeaker_framing_requires_simultaneous_presence(self):
+        """Alternating solo shots must NOT trigger split-stack; wide two-shot MUST trigger."""
+        from src.engine_vision import detect_multispeaker_framing
+
+        speaker_turns = [
+            {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+            {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
+        ]
+
+        # Case 1: Alternating solo shots (Host on left in frames 0-4, Guest on right in frames 5-9, never together)
+        alternating_frames = [
+            [(300, 200, 150, 150)] for _ in range(5)
+        ] + [
+            [(1500, 200, 150, 150)] for _ in range(5)
+        ]
+        res_alternating = detect_multispeaker_framing(
+            alternating_frames, speaker_turns, source_w=1920, source_h=1080
+        )
+        self.assertIsNone(res_alternating, "Alternating solo closeups must NOT trigger dual-speaker split!")
+
+        # Case 2: Genuine wide 2-shot (both Host and Guest appear together in the same frame >= 35% of time)
+        wide_frames = [
+            [(300, 200, 150, 150), (1500, 200, 150, 150)] for _ in range(8)
+        ] + [
+            [(300, 200, 150, 150)] for _ in range(2)
+        ]
+        res_wide = detect_multispeaker_framing(
+            wide_frames, speaker_turns, source_w=1920, source_h=1080
+        )
+        self.assertIsNotNone(res_wide, "Genuine wide 2-shot with both faces visible simultaneously MUST trigger split-stack!")
+        self.assertTrue(res_wide["is_dual_speaker"])
+        self.assertIn("top_crop", res_wide)
+        self.assertIn("bottom_crop", res_wide)
+
 
 if __name__ == "__main__":
     unittest.main()
+

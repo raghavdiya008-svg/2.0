@@ -1053,6 +1053,8 @@ def detect_multispeaker_framing(
     left_bound = source_w * 0.48
     right_bound = source_w * 0.52
 
+    frames_with_both_simultaneous = 0
+
     for boxes in all_frames_boxes:
         has_left = False
         has_right = False
@@ -1083,10 +1085,18 @@ def detect_multispeaker_framing(
             frames_with_left += 1
         if has_right:
             frames_with_right += 1
+        if has_left and has_right:
+            frames_with_both_simultaneous += 1
 
-    # Both left and right clusters must have consistent presence (>= 20% of sampled frames)
+    # Devil's Advocate fix: Solo shots alternating (or solo closeups) must NOT trigger a static split-stack!
+    # Both left and right clusters must have consistent presence, AND they MUST appear SIMULTANEOUSLY
+    # in at least 35% of sampled frames (proving the camera is a wide multi-speaker shot).
     min_presence = max(1, int(total_frames * 0.20))
+    min_simultaneous = max(1, int(total_frames * 0.35))
     if frames_with_left < min_presence or frames_with_right < min_presence:
+        return None
+    if frames_with_both_simultaneous < min_simultaneous:
+        # Not a wide two-shot! They appear in alternating solo shots, so solo tracking must be used instead.
         return None
 
     if not left_cluster_centers or not right_cluster_centers:
