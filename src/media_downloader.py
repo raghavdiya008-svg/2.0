@@ -45,7 +45,7 @@ def _ytdlp_extra_args() -> list:
     - --no-check-certificates -> avoids TLS errors in restricted cloud networks.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=android,tv,web",
+        "--extractor-args", "youtube:player_client=ios,mweb,android,tv,web",
         "--no-check-certificates",
     ]
     cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
@@ -176,7 +176,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
-            "extractor_args": {"youtube": {"player_client": ["android", "tv", "web"]}},
+            "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "android", "tv", "web"]}},
             "nocheckcertificate": True,
         }
         if os.path.isfile(cookies_path):

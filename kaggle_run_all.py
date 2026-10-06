@@ -72,6 +72,11 @@ def setup_kaggle_environment():
             print("\n  ✓ FFmpeg already installed in Kaggle environment.")
 
         print("\nChecking Kaggle GPU dependencies...")
+        try:
+            print("  ⬆ Updating yt-dlp to latest release...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp", "--no-warn-script-location", "-q"], check=False)
+        except Exception:
+            pass
         import_map = {
             "whisperx": "whisperx",
             "faster-whisper": "faster_whisper",
