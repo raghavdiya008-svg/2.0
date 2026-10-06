@@ -64,21 +64,7 @@ def setup_kaggle_environment():
         except Exception as e:
             print(f"Failed to update system packages: {e}")
             
-        # ── Ollama Local Runtime Setup (Only if not using Gemini workflow or if explicitly requested) ──
-        skip_ollama = os.environ.get("SKIP_OLLAMA", "").lower() in ["1", "true", "yes"] or "--no-ollama" in sys.argv
-        if not skip_ollama:
-            print("\nEnsuring local Ollama runtime is available on Kaggle/Colab GPU...")
-            try:
-                subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True, check=True)
-                subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(3)
-                default_model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-                print(f"Pre-pulling Ollama model '{default_model}'...")
-                subprocess.run(["ollama", "pull", default_model], check=False)
-            except Exception as e:
-                print(f"Ollama local runtime setup note: {e}")
-        else:
-            print("\nSkipping Ollama installation (Gemini / External workflow active).")
+        # System dependencies updated
 
         print("\nChecking Kaggle GPU dependencies...")
         import_map = {

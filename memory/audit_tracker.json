@@ -1,10 +1,10 @@
 {
   "tracker_id": "2.0-server-audit-sync-v1",
-  "last_synced_at": "2026-10-05T19:11:33.193485Z",
-  "last_synced_timestamp": 1791227493.1934857,
+  "last_synced_at": "2026-10-06T04:07:08.007478Z",
+  "last_synced_timestamp": 1791259628.0074785,
   "system_audit": {
     "engine_version": "2.0-autonomous",
-    "timestamp": "2026-10-05T19:11:33.193485Z",
+    "timestamp": "2026-10-06T04:07:08.007478Z",
     "platform": "Windows-10-10.0.26300-SP0",
     "python_version": "3.10.11",
     "phases_compliance": {
@@ -38,46 +38,72 @@
   },
   "git_state": {
     "branch": "main",
-    "commit_sha": "fc70f064c0fae6582b457e07194ed0ac072358d7",
+    "commit_sha": "6f9076dabf9a4dc48cd41d59a2bff9831c4b1103",
     "remote_origin": "https://raghavdiya008-svg@github.com/raghavdiya008-svg/2.0.git",
     "working_tree_clean": false,
     "uncommitted_files": [
       "M docs/AUDIT_MEMORY_TRACKER.md",
       " M kaggle_run_all.py",
-      " M memory/audit_tracker.json"
+      " M license.lease",
+      " M memory/audit_tracker.json",
+      "D  preflight_check.py",
+      "D  run_baseline_check.py",
+      " M src/curation_engine.py",
+      "RM src/ollama_director.py -> src/director.py",
+      " M src/pipeline.py",
+      " M src/server.py",
+      " M src/templates/index.html",
+      "RM tests/test_ollama_director.py -> tests/test_director.py",
+      "D  verify_phase1_audit.py"
     ]
   },
   "pipeline_db": {
     "exists": true,
-    "total_jobs": 3,
+    "total_jobs": 5,
     "status_counts": {
       "queued": 0,
       "running": 0,
       "completed": 3,
-      "failed": 0
+      "failed": 2
     },
     "recent_jobs": [
       {
+        "job_id": "b_26e3296f_1",
+        "status": "failed",
+        "created_at": "2026-10-06 04:07:06",
+        "updated_at": "2026-10-06 04:07:06",
+        "error_message": "FFmpeg slicing failed for clip 0.0-35.0: b'ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\\r\\n  built with gcc 16.1.0 (Rev2, Built by MSYS2 project)\\r\\n  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper\\r\\n  libavutil      61.  1.100 / 61.  1.100\\r\\n  libavcodec     63.  1.100 / 63.  1.100\\r\\n  libavformat    63.  1.100 / 63.  1.100\\r\\n  libavdevice    63.  1.100 / 63.  1.100\\r\\n  libavfilter    12.  1.100 / 12.  1.100\\r\\n  libswscale     10.  1.100 / 10.  1.100\\r\\n  libswresample   7.  1.100 /  7.  1.100\\r\\n[in#0 @ 0000017c274d3580] Error opening input: No such file or directory\\r\\nError opening input file C:\\\\Users\\\\dksha\\\\Downloads\\\\New folder (4)\\\\2.0\\\\inputs\\\\batch_test_vid.mp4.\\r\\nError opening input files: No such file or directory\\r\\n'",
+        "payload_summary": {}
+      },
+      {
+        "job_id": "b_26e3296f_2",
+        "status": "failed",
+        "created_at": "2026-10-06 04:07:06",
+        "updated_at": "2026-10-06 04:07:06",
+        "error_message": "FFmpeg slicing failed for clip 35.0-70.0: b'ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\\r\\n  built with gcc 16.1.0 (Rev2, Built by MSYS2 project)\\r\\n  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper\\r\\n  libavutil      61.  1.100 / 61.  1.100\\r\\n  libavcodec     63.  1.100 / 63.  1.100\\r\\n  libavformat    63.  1.100 / 63.  1.100\\r\\n  libavdevice    63.  1.100 / 63.  1.100\\r\\n  libavfilter    12.  1.100 / 12.  1.100\\r\\n  libswscale     10.  1.100 / 10.  1.100\\r\\n  libswresample   7.  1.100 /  7.  1.100\\r\\n[in#0 @ 00000137de113900] Error opening input: No such file or directory\\r\\nError opening input file C:\\\\Users\\\\dksha\\\\Downloads\\\\New folder (4)\\\\2.0\\\\inputs\\\\batch_test_vid.mp4.\\r\\nError opening input files: No such file or directory\\r\\n'",
+        "payload_summary": {}
+      },
+      {
         "job_id": "job_1",
         "status": "completed",
-        "created_at": "2026-10-05 19:03:14",
-        "updated_at": "2026-10-05 19:03:14",
+        "created_at": "2026-10-06 04:05:55",
+        "updated_at": "2026-10-06 04:05:55",
         "error_message": null,
         "payload_summary": {}
       },
       {
         "job_id": "job_2",
         "status": "completed",
-        "created_at": "2026-10-05 19:03:14",
-        "updated_at": "2026-10-05 19:03:14",
+        "created_at": "2026-10-06 04:05:55",
+        "updated_at": "2026-10-06 04:05:55",
         "error_message": null,
         "payload_summary": {}
       },
       {
         "job_id": "job_3",
         "status": "completed",
-        "created_at": "2026-10-05 19:03:14",
-        "updated_at": "2026-10-05 19:03:14",
+        "created_at": "2026-10-06 04:05:55",
+        "updated_at": "2026-10-06 04:05:55",
         "error_message": null,
         "payload_summary": {}
       }
@@ -99,11 +125,11 @@
     ]
   },
   "licensing": {
-    "hwid": "df1dd13e5351cf919199907fd552daaf1ec52849faca4dc12c66d73d6ca06681",
+    "hwid": "4df626e13083449993062096493c207f7340bfa90e1d2ca47614f0ddba455793",
     "license_valid": true,
     "license_type": "development",
-    "issued_at": 1791227127.17,
-    "expires_at": 1791486327.17,
+    "issued_at": 1791259624.32,
+    "expires_at": 1791518824.32,
     "max_offline_hours": 72.0
   }
 }

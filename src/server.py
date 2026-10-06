@@ -98,7 +98,7 @@ import pipeline
 from engine_watermark import detect_blurred_logos, WatermarkRejectionError
 import memory_sync
 import camera_framing
-import ollama_director
+import director
 
 # Initialize the render queue manager and start background worker
 render_queue_manager = RenderQueueManager.get_instance()
@@ -486,8 +486,8 @@ def _run_render_job(job_data, **kwargs):
 
             if saved_cfg and saved_cfg.zones:
                 try:
-                    director = ollama_director.TVDirector(saved_cfg)
-                    shots = director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
+                    tv_director = director.TVDirector(saved_cfg)
+                    shots = tv_director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
                     traj = {"layout": "director_multizone", "shot_timeline": shots}
                 except Exception as e:
                     logger.warning(f"[server] Auto TV director fallback: {e}")
@@ -507,12 +507,7 @@ def _run_render_job(job_data, **kwargs):
         job_data["trajectory"] = traj
 
         # 2. Determine Subtitle Safe Placement and Generate ASS
-        is_dual = (
-            traj.get("layout") == "dual_speaker_split"
-            or bool(traj.get("is_dual_speaker", False))
-            or bool(traj.get("shot_timeline") and any(s.get("type") == "split_stack" for s in traj.get("shot_timeline", [])))
-        )
-        margin_v = int(job_data.get("margin_v") or (960 if is_dual else 580))
+        margin_v = int(job_data.get("margin_v") or 580)
 
         if not job_data.get("ass_path") and clip_words:
             try:
@@ -1552,12 +1547,12 @@ def api_director_plan(req: DirectorPlanRequest):
                 cfg = camera_framing._build_default_podcast_config(req.file_name, 1920, 1080)
 
         words = req.words or []
-        director = ollama_director.TVDirector(cfg)
-        shots = director.direct_clip(
+        tv_director = director.TVDirector(cfg)
+        shots = tv_director.direct_clip(
             words_or_dialogue=words,
             clip_start=req.start,
             clip_end=req.end,
-            use_ollama=req.use_ollama
+            use_ollama=False
         )
         return {
             "status": "ok",

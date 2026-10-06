@@ -190,10 +190,16 @@ def _setup_ollama_model_cache() -> None:
 
 def _start_ollama_server() -> bool:
     """
-    Ensures a fresh Ollama server is running on port 11434.
+    Ensures a fresh Ollama server is running on port 11434 if installed.
     Returns True if server is ready, False otherwise.
     """
     global _ollama_process
+
+    if os.environ.get("SKIP_OLLAMA", "").lower() in ["1", "true", "yes"] or "--no-ollama" in sys.argv:
+        return False
+
+    if shutil.which("ollama") is None:
+        return False
 
     if _port_in_use(OLLAMA_PORT):
         logger.info("[curation] Port 11434 already in use — assuming external or existing Ollama is ready.")
@@ -209,7 +215,7 @@ def _start_ollama_server() -> bool:
         )
         logger.info(f"[curation] Ollama serve started (PID {_ollama_process.pid}). Waiting for port...")
     except FileNotFoundError:
-        logger.warning("[curation] `ollama` binary not found. Falling back to even-split curation.")
+        logger.warning("[curation] `ollama` binary not found. Falling back to rule-based curation.")
         return False
 
     # Poll until ready (30s timeout)

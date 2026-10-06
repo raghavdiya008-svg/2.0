@@ -105,7 +105,7 @@
             const [isRenderingBatch, setIsRenderingBatch] = useState(false);
             const [renderSpeed, setRenderSpeed] = useState(1.10);
             const [globalTitleY, setGlobalTitleY] = useState(130);
-            const [globalMarginV, setGlobalMarginV] = useState(960);
+            const [globalMarginV, setGlobalMarginV] = useState(580);
 
             // Virtual TV Director Preview & Reviewer State
             const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -1314,12 +1314,12 @@ Or Plain Text:
                                             min="400"
                                             max="1100"
                                             step="20"
-                                            value={globalMarginV || 960}
+                                            value={globalMarginV || 580}
                                             onChange={(e) => setGlobalMarginV(parseInt(e.target.value))}
                                             className="w-16 h-1 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
                                         />
                                         <span className="font-mono text-blue-400 font-bold text-[11px]">
-                                            {globalMarginV === 960 ? '960px (Center)' : globalMarginV === 580 ? '580px (Lower)' : `${globalMarginV || 960}px`}
+                                            {globalMarginV === 960 ? '960px (Center)' : globalMarginV === 580 ? '580px (Bottom)' : `${globalMarginV || 580}px`}
                                         </span>
                                     </div>
                                 </div>
@@ -2437,7 +2437,7 @@ Or Plain Text:
             const [titleY, setTitleY] = useState(clip?.title_y || 130);
             const [showTitle, setShowTitle] = useState(!clip?.delete_title);
             const isDual = Boolean(shots && shots.some(s => s.type === 'split_stack'));
-            const [marginV, setMarginV] = useState(clip?.margin_v || (isDual ? 960 : 580));
+            const [marginV, setMarginV] = useState(clip?.margin_v || 580);
 
             useEffect(() => {
                 if (clip) {

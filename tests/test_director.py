@@ -7,7 +7,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from camera_framing import CameraZone, CameraFramingConfig
-from ollama_director import TVDirector
+from director import TVDirector
 
 @pytest.fixture
 def sample_config():

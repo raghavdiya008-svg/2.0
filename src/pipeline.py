@@ -55,7 +55,7 @@ import caption_engine
 import engine_vad
 import engine_watermark
 import camera_framing
-import ollama_director
+import director
 from engine_watermark import detect_blurred_logos, WatermarkRejectionError
 
 try:
@@ -606,8 +606,8 @@ def run_pipeline(
                 if saved_cfg and saved_cfg.zones:
                     try:
                         print(f"[pipeline] Directing Hook #{idx} with Virtual TV Director ({len(saved_cfg.zones)} zones configured)...")
-                        director = ollama_director.TVDirector(saved_cfg)
-                        shots = director.direct_clip(slice_words, clip_start=0.0, clip_end=dur, use_ollama=True)
+                        director_inst = director.TVDirector(saved_cfg)
+                        shots = director_inst.direct_clip(slice_words, clip_start=0.0, clip_end=dur, use_ollama=False)
                         trajectory = {"layout": "director_multizone", "shot_timeline": shots}
                         traj_data = trajectory
                     except Exception as e:
