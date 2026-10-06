@@ -1418,20 +1418,144 @@ def calculate_tracking_trajectory(
             "scene_cuts": clean_cuts,
         }
 
-    # Evaluate multi-speaker split-stack layout if two active alternating participants exist
-    multispeaker_meta = detect_multispeaker_framing(
-        frame_detections=all_frame_detections,
-        speaker_turns=speaker_segments,
-        source_w=source_w,
-        source_h=source_h,
-    )
-    if multispeaker_meta is not None:
-        best_x = max(0, (source_w - target_crop_w) // 2)
-        print(
-            f"[engine_vision] Dual-speaker split layout activated | "
-            f"top_crop={multispeaker_meta['top_crop']} | bottom_crop={multispeaker_meta['bottom_crop']} | "
-            f"transitions={multispeaker_meta.get('transitions', 0)}"
+    # =========================================================================
+    # Shot-Aware Dynamic Framing:
+    # Segment the slice by scene cuts and determine layout for EACH shot:
+    # - If a shot has genuine wide two-shot (both faces simultaneous >= 35%), layout is split_stack
+    # - If a shot is a close-up solo shot, layout is single (SmoothGlide centered on focal face)
+    # =========================================================================
+    clip_total_dur = sample_timestamps[-1] if sample_timestamps else (frame_count / fps if fps > 0 else 0.0)
+
+    # 1. Check if ANY shot contains wide two-speakers
+    # Build list of shot intervals: [0.0, cut1], [cut1, cut2], ... [cutN, clip_total_dur]
+    shot_boundaries = [0.0] + [c for c in clean_cuts if 0.0 < c < clip_total_dur] + [clip_total_dur]
+    shot_intervals: List[Tuple[float, float]] = []
+    for si in range(len(shot_boundaries) - 1):
+        s_start = shot_boundaries[si]
+        s_end = shot_boundaries[si + 1]
+        if (s_end - s_start) >= 0.3:  # ignore micro noise intervals < 0.3s
+            shot_intervals.append((s_start, s_end))
+
+    shot_timeline: List[Dict[str, Any]] = []
+    has_any_split_shot = False
+    has_any_single_shot = False
+
+    for s_start, s_end in shot_intervals:
+        # Collect frame detections and speaker turns in this specific shot
+        shot_frame_dets = [
+            fd for fd in all_frame_detections if s_start <= fd[0] <= s_end
+        ]
+        shot_speaker_turns = []
+        if speaker_segments:
+            for spk_seg in speaker_segments:
+                spk_s = max(s_start, spk_seg["start"] - slice_start_time)
+                spk_e = min(s_end, spk_seg["end"] - slice_start_time)
+                if spk_e > spk_s:
+                    shot_speaker_turns.append({"speaker": spk_seg["speaker"], "start": spk_s, "end": spk_e})
+
+        shot_multi = detect_multispeaker_framing(
+            frame_detections=shot_frame_dets,
+            speaker_turns=shot_speaker_turns,
+            source_w=source_w,
+            source_h=source_h,
         )
+
+        if shot_multi is not None:
+            # Wide two-shot: Stack 9:8
+            has_any_split_shot = True
+            top_c = shot_multi["top_crop"]
+            bot_c = shot_multi["bottom_crop"]
+            shot_timeline.append({
+                "start": round(s_start, 2),
+                "end": round(s_end, 2),
+                "type": "split_stack",
+                "camera": "split",
+                "top_zone": {
+                    "id": "zone_host", "label": "Host",
+                    "x": top_c["x"], "y": top_c["y"], "width": top_c["w"], "height": top_c["h"]
+                },
+                "bot_zone": {
+                    "id": "zone_guest", "label": "Guest",
+                    "x": bot_c["x"], "y": bot_c["y"], "width": bot_c["w"], "height": bot_c["h"]
+                },
+            })
+        else:
+            # Solo shot: Find dominant face center in this shot
+            has_any_single_shot = True
+            shot_offsets = [
+                raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
+                if s_start <= ts <= s_end
+            ]
+            if shot_offsets:
+                shot_x = int(round(statistics.median(shot_offsets)))
+            else:
+                shot_x = center_x
+            shot_x = max(0, min(shot_x, source_w - target_crop_w))
+
+            shot_timeline.append({
+                "start": round(s_start, 2),
+                "end": round(s_end, 2),
+                "type": "single",
+                "camera": "solo",
+                "zone": {
+                    "id": "zone_solo", "label": "Solo",
+                    "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
+                },
+            })
+
+    # If the slice has mixed shots (e.g. wide split + solo closeups) OR pure multi-shot sequence with splits:
+    if has_any_split_shot and shot_timeline:
+        # Merge adjacent identical shots
+        merged_timeline: List[Dict[str, Any]] = []
+        for s in shot_timeline:
+            if (
+                merged_timeline
+                and merged_timeline[-1]["type"] == s["type"]
+                and merged_timeline[-1].get("camera") == s.get("camera")
+            ):
+                merged_timeline[-1]["end"] = s["end"]
+            else:
+                merged_timeline.append(s)
+
+        # Sanity clamp start and end
+        if merged_timeline:
+            merged_timeline[0]["start"] = 0.0
+            merged_timeline[-1]["end"] = round(clip_total_dur, 2)
+
+        print(
+            f"[engine_vision] Shot-aware dynamic timeline generated | {len(merged_timeline)} shot(s) | "
+            f"splits={sum(1 for s in merged_timeline if s['type'] == 'split_stack')} | "
+            f"solos={sum(1 for s in merged_timeline if s['type'] == 'single')}"
+        )
+
+        # If EVERY shot in the entire clip was split_stack, we can use the high-performance dual_speaker_split directly
+        if all(s["type"] == "split_stack" for s in merged_timeline):
+            first_split = merged_timeline[0]
+            top_z = first_split["top_zone"]
+            bot_z = first_split["bot_zone"]
+            return {
+                "fps": fps,
+                "frame_count": frame_count,
+                "source_w": source_w,
+                "source_h": source_h,
+                "is_vertical": False,
+                "is_dual_speaker": True,
+                "layout": "dual_speaker_split",
+                "dual_speaker_layout": {
+                    "layout": "dual_speaker_split",
+                    "is_dual_speaker": True,
+                    "top_crop": {"x": top_z["x"], "y": top_z["y"], "w": top_z["width"], "h": top_z["height"]},
+                    "bottom_crop": {"x": bot_z["x"], "y": bot_z["y"], "w": bot_z["width"], "h": bot_z["height"]},
+                },
+                "x_offsets": [center_x],
+                "sample_timestamps": [0.0],
+                "keyframes": [{"time": 0.0, "x_offset": center_x}],
+                "best_x_offset": center_x,
+                "zoom_keyframes": [],
+                "scene_cuts": clean_cuts,
+            }
+
+        # Otherwise, we have a dynamic hybrid timeline (e.g. split on wide shot -> solo on close-up)
         return {
             "fps": fps,
             "frame_count": frame_count,
@@ -1439,12 +1563,12 @@ def calculate_tracking_trajectory(
             "source_h": source_h,
             "is_vertical": False,
             "is_dual_speaker": True,
-            "layout": "dual_speaker_split",
-            "dual_speaker_layout": multispeaker_meta,
-            "x_offsets": [best_x],
+            "layout": "director_multizone",
+            "shot_timeline": merged_timeline,
+            "x_offsets": [center_x],
             "sample_timestamps": [0.0],
-            "keyframes": [{"time": 0.0, "x_offset": best_x}],
-            "best_x_offset": best_x,
+            "keyframes": [{"time": 0.0, "x_offset": center_x}],
+            "best_x_offset": center_x,
             "zoom_keyframes": [],
             "scene_cuts": clean_cuts,
         }
