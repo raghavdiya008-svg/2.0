@@ -165,6 +165,28 @@ class TestInsightFaceSmoothGlide(unittest.TestCase):
         self.assertIn("top_crop", res_wide)
         self.assertIn("bottom_crop", res_wide)
 
+    def test_solo_subject_moving_never_triggers_split_stack(self):
+        """A solo person moving across the frame (or with tiny false detections) must NEVER trigger split-stack."""
+        from src.engine_vision import detect_multispeaker_framing
+
+        speaker_turns = [{"start": 0.0, "end": 10.0, "speaker": "SPEAKER_00"}]
+
+        # 10 frames: Solo speaker at center-left, with a tiny noise false positive or swaying
+        frames = [
+            [(850, 300, 120, 120)] for _ in range(5)
+        ] + [
+            [(1020, 300, 120, 120)] for _ in range(5)
+        ]
+        res = detect_multispeaker_framing(frames, speaker_turns, source_w=1920, source_h=1080)
+        self.assertIsNone(res, "Solo speaker moving across center must NOT trigger split-stack!")
+
+        # Solo speaker + close-together noise detection in same frame (< 25% screen width apart)
+        frames_close_detections = [
+            [(800, 300, 120, 120), (950, 320, 80, 80)] for _ in range(8)
+        ]
+        res_close = detect_multispeaker_framing(frames_close_detections, speaker_turns, source_w=1920, source_h=1080)
+        self.assertIsNone(res_close, "Close together detections (< 25% screen width) must NOT trigger split-stack!")
+
 
 if __name__ == "__main__":
     unittest.main()

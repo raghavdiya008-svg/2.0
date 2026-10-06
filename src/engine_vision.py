@@ -388,7 +388,7 @@ def detect_scene_cuts(
     video_path: str,
     start_time: float = 0.0,
     end_time: Optional[float] = None,
-    threshold: float = 27.0,
+    threshold: float = 20.0,
 ) -> List[float]:
     """
     Detects hard scene/shot transitions in a video within [start_time, end_time]
@@ -398,7 +398,7 @@ def detect_scene_cuts(
         video_path: Path to video file.
         start_time: Start offset in seconds (default 0.0).
         end_time: Optional end offset in seconds.
-        threshold: ContentDetector sensitivity threshold (default 27.0).
+        threshold: ContentDetector sensitivity threshold (default 20.0).
 
     Returns:
         List of cut timestamps in seconds, relative to start_time (timestamp offsets within the slice).
@@ -1052,12 +1052,15 @@ def detect_multispeaker_framing(
 
     left_bound = source_w * 0.48
     right_bound = source_w * 0.52
+    min_face_separation = source_w * 0.25  # At least 25% horizontal gap between distinct speakers
 
     frames_with_both_simultaneous = 0
 
     for boxes in all_frames_boxes:
         has_left = False
         has_right = False
+        frame_box_centers: List[float] = []
+
         for b in boxes:
             if isinstance(b, (tuple, list)) and len(b) >= 4:
                 bx, by, bw, bh = b[:4]
@@ -1069,11 +1072,13 @@ def detect_multispeaker_framing(
             else:
                 continue
 
-            # Filter out tiny noise detections
-            if bw < 20 or bh < 20:
+            # Filter out tiny noise detections (< 35px or area < 1500px^2)
+            if bw < 35 or bh < 35 or (bw * bh) < 1500:
                 continue
 
             cx = bx + bw / 2.0
+            frame_box_centers.append(cx)
+
             if cx < left_bound:
                 left_cluster_centers.append(cx)
                 has_left = True
@@ -1085,8 +1090,16 @@ def detect_multispeaker_framing(
             frames_with_left += 1
         if has_right:
             frames_with_right += 1
-        if has_left and has_right:
-            frames_with_both_simultaneous += 1
+
+        # Strict simultaneous co-presence check:
+        # A frame only counts as simultaneous two-shot if:
+        # 1) At least one face is on the left AND at least one on the right, AND
+        # 2) The horizontal distance between the extreme centers is at least 25% of source_w!
+        # This completely prevents a single speaker swaying/gesturing across the center line
+        # or false-positive edge artifacts from being counted as two co-present speakers.
+        if has_left and has_right and len(frame_box_centers) >= 2:
+            if (max(frame_box_centers) - min(frame_box_centers)) >= min_face_separation:
+                frames_with_both_simultaneous += 1
 
     # Devil's Advocate fix: Solo shots alternating (or solo closeups) must NOT trigger a static split-stack!
     # Both left and right clusters must have consistent presence, AND they MUST appear SIMULTANEOUSLY
