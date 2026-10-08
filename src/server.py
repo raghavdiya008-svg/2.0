@@ -501,8 +501,14 @@ def _run_render_job(job_data, **kwargs):
         if not job_data.get("ass_path") and clip_words:
             try:
                 import caption_engine
-                ass_temp_file = os.path.join(TEMP_DIR, f"sub_{uuid.uuid4().hex[:8]}.ass")
-                caption_engine.generate_karaoke_ass(clip_words, ass_temp_file, margin_v=margin_v)
+                caption_engine.generate_karaoke_ass(
+                    clip_words,
+                    ass_temp_file,
+                    font_name="Anton",
+                    font_size=92,
+                    margin_v=margin_v,
+                    uppercase=True,
+                )
             except Exception as e:
                 logger.warning(f"[server] Failed to generate ASS karaoke: {e}")
 

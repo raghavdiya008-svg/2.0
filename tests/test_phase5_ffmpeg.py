@@ -103,9 +103,9 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         fc = self._get_filter_complex(cmd)
 
         self.assertIn("drawtext=", fc)
-        self.assertIn("x=(w-text_w)/2:y=130", fc)
+        self.assertIn("x=(w-text_w)/2:y=110", fc)
         self.assertIn("fontsize=54:fontcolor=white", fc)
-        self.assertIn("box=1:boxcolor=black@0.75:boxborderw=20", fc)
+        self.assertIn("box=1:boxcolor=black@0.80:boxborderw=16", fc)
         self.assertIn("[comp_title]", fc)
 
     def test_05_headline_text_escaping(self):
@@ -184,7 +184,7 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         self.assertIn("[comp0][brand_logo]overlay=W-w-40:40[comp_brand]", fc)
         self.assertIn("[comp_brand][wm_semi]overlay=W-w-30:H-h-30[comp_wm]", fc)
         self.assertIn("[comp_wm]drawtext=", fc)
-        self.assertIn(":x=(w-text_w)/2:y=130:fontsize=54:fontcolor=white:", fc)
+        self.assertIn(":x=(w-text_w)/2:y=110:fontsize=54:fontcolor=white:", fc)
         self.assertIn("[comp_title]null,format=yuv420p[vout]", fc)
 
     def test_09_permutations_zero_orphaned_pads(self):
@@ -240,7 +240,7 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         self.assertIn("eq=contrast=1.04:brightness=0.01:saturation=1.08:gamma=1.02", fc)
         self.assertIn("drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill,format=yuv420p[comp0]", fc)
         self.assertIn("drawtext=", fc)
-        self.assertIn(":x=(w-text_w)/2:y=130:", fc)
+        self.assertIn(":x=(w-text_w)/2:y=110:", fc)
         self.assertIn("[vout]", fc)
 
 

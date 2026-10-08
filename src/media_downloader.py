@@ -170,7 +170,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
         cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
         ydl_opts = {
-            "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            "format": "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "outtmpl": safe_filename,
             "noplaylist": True,
@@ -220,7 +220,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     if not _downloaded_ok:
         print("[media_downloader] Trying subprocess fallback...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            "-f", "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best",
             "--merge-output-format", "mp4",
             "-o", safe_filename,
             "--no-playlist",
@@ -231,7 +231,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         if result.returncode != 0 or not os.path.isfile(safe_filename):
             print("[media_downloader] Primary format failed — retrying with relaxed format...")
             fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-                "-f", "best[ext=mp4]/best",
+                "-f", "bestvideo+bestaudio/best",
                 "--merge-output-format", "mp4",
                 "-o", safe_filename,
                 "--no-playlist",

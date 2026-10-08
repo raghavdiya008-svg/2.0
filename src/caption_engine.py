@@ -97,6 +97,16 @@ CAPTION_PRESETS = {
         "margin_v": 580,
         "uppercase": False,
     },
+    "anton": {
+        "font_name": "Anton",
+        "font_size": 92,
+        "primary_color": "&H0000FFFF",   # Neon vibrant yellow
+        "secondary_color": "&H00FFFFFF", # Pure crisp white
+        "outline_color": "&H00000000",
+        "back_color": "&H90000000",
+        "margin_v": 440,
+        "uppercase": True,
+    },
     "anton_viral": {
         "font_name": "Anton",
         "font_size": 86,
@@ -170,13 +180,16 @@ def _ass_header(
 ) -> str:
     """Returns the complete ASS script header with Opus-grade kinetic typography."""
     safe_font = font_name.replace(",", "")
+    outl = 5.0 if safe_font.lower() in ("anton", "theboldfont") else 4.5
+    shad = 3.5 if safe_font.lower() in ("anton", "theboldfont") else 3
+    spc = 2 if safe_font.lower() in ("anton", "theboldfont") else 1
     style_line = (
         f"Style: Default,{safe_font},{font_size},"
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         # Bold  Italic Underline StrikeOut ScaleX ScaleY Spacing Angle
-        f"-1,0,0,0,100,100,1,0,"
+        f"-1,0,0,0,100,100,{spc},0,"
         # BorderStyle Outline Shadow Alignment MarginL MarginR MarginV Encoding
-        f"1,4.5,3,2,{MARGIN_LR},{MARGIN_LR},{margin_v},1\n"
+        f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1\n"
     )
     return (
         "[Script Info]\n"

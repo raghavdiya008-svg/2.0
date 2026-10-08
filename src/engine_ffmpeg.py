@@ -148,6 +148,9 @@ def escape_ffmpeg_drawtext(text: str) -> str:
 def get_system_font_path() -> Optional[str]:
     """Finds an available bold sans-serif TrueType font for drawtext across Linux/Kaggle, Windows, and macOS."""
     candidates = [
+        # Project-level custom fonts
+        os.path.join(_PROJECT_ROOT, "fonts", "Anton.ttf"),
+        os.path.join(_PROJECT_ROOT, "fonts", "TheBoldFont.ttf"),
         # Linux / Kaggle / Colab / Debian / Ubuntu
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -822,15 +825,15 @@ def build_ffmpeg_command(
             txt_esc = os.path.abspath(temp_text_file).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
             filter_complex_parts.append(
                 f"{current_label}drawtext={font_opt}textfile='{txt_esc}':"
-                f"x=(w-text_w)/2:y=130:fontsize={f_size}:fontcolor=white:line_spacing=12:"
-                f"box=1:boxcolor=black@0.75:boxborderw=20[comp_title]"
+                f"x=(w-text_w)/2:y=110:fontsize={f_size}:fontcolor=white:line_spacing=12:"
+                f"box=1:boxcolor=black@0.80:boxborderw=16:enable='between(t,0,4.5)'[comp_title]"
             )
         else:
             escaped_title = escape_ffmpeg_drawtext(wrapped_title)
             filter_complex_parts.append(
                 f"{current_label}drawtext={font_opt}text='{escaped_title}':"
-                f"x=(w-text_w)/2:y=130:fontsize={f_size}:fontcolor=white:line_spacing=12:"
-                f"box=1:boxcolor=black@0.75:boxborderw=20[comp_title]"
+                f"x=(w-text_w)/2:y=110:fontsize={f_size}:fontcolor=white:line_spacing=12:"
+                f"box=1:boxcolor=black@0.80:boxborderw=16:enable='between(t,0,4.5)'[comp_title]"
             )
         current_label = "[comp_title]"
 
@@ -848,10 +851,13 @@ def build_ffmpeg_command(
         # Full absolute path properly escaped so subprocess working directory changes never break subtitle loading
         abs_ass = os.path.abspath(ass_path).replace("\\", "/")
         ass_path_escaped = abs_ass.replace(":", "\\:").replace("'", "'\\\\\\''")
+        fonts_dir = os.path.join(_PROJECT_ROOT, "fonts")
+        fonts_dir_esc = os.path.abspath(fonts_dir).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
+        fonts_arg = f":fontsdir='{fonts_dir_esc}'" if os.path.isdir(fonts_dir) else ""
 
         # MarginV = 440 safe-zone lower third is standard across all layouts
         filter_complex_parts.append(
-            f"{current_label}subtitles='{ass_path_escaped}',format=yuv420p[vout]"
+            f"{current_label}subtitles='{ass_path_escaped}'{fonts_arg},format=yuv420p[vout]"
         )
     else:
         # Static drawtext header banners are completely purged
@@ -980,8 +986,17 @@ def render_clip(
         err_msg = (e.stderr or "") + (e.stdout or "")
         is_nvenc_err = any(
             k in err_msg.lower()
-            for k in ["h264_nvenc", "nvenc", "nvcuda", "cuda", "cannot load nvcuda", "device creation failed", "unknown encoder"]
-        ) or e.returncode == 8
+            for k in [
+                "cannot load nvcuda",
+                "nvcuda.dll",
+                "libnvcuda",
+                "device creation failed",
+                "unknown encoder 'h264_nvenc'",
+                "no nvenc capable devices",
+                "failed to create nvenc",
+                "driver does not support nvenc",
+            ]
+        ) or (e.returncode == 8 and "cuda" in err_msg.lower())
         if is_nvenc_err and "-c:v" in cmd and "h264_nvenc" in cmd:
             global _NVENC_FORCE_DISABLED
             _NVENC_FORCE_DISABLED = True

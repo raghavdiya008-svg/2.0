@@ -629,8 +629,11 @@ def run_pipeline(
             ass_path = caption_engine.generate_karaoke_ass(
                 words=slice_words,
                 output_ass_path=slice_ass_path,
+                font_name="Anton",
+                font_size=92,
                 margin_v=ass_margin_v,
                 shot_timeline=shot_tl,
+                uppercase=True,
             )
             if not (ass_path and os.path.isfile(ass_path)):
                 ass_path = None

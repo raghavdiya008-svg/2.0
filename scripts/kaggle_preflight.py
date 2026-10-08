@@ -73,9 +73,30 @@ def check_dependencies(auto_install=True):
             else:
                 print(f"❌ Missing dependency: {name}. Run: !pip install {pip_pkg}")
 
+def check_fonts():
+    print("\n--- Fonts Check ---")
+    os.makedirs("fonts", exist_ok=True)
+    font_path = os.path.join("fonts", "Anton.ttf")
+    bold_path = os.path.join("fonts", "TheBoldFont.ttf")
+    if not os.path.isfile(font_path) or os.path.getsize(font_path) < 1000:
+        print("🔄 Auto-downloading viral subtitle font (Anton.ttf)...")
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(
+                "https://raw.githubusercontent.com/google/fonts/main/ofl/anton/Anton-Regular.ttf",
+                font_path
+            )
+            import shutil
+            shutil.copy(font_path, bold_path)
+            print("✅ Viral font installed: fonts/Anton.ttf & fonts/TheBoldFont.ttf")
+        except Exception as e:
+            print(f"⚠️ Could not download font automatically: {e}")
+    else:
+        print("✅ Viral subtitle font ready: fonts/Anton.ttf")
+
 def check_dirs():
     print("\n--- Directory Structure Check ---")
-    expected_dirs = ["inputs", "outputs", "temp", "models"]
+    expected_dirs = ["inputs", "outputs", "temp", "models", "fonts"]
     for d in expected_dirs:
         os.makedirs(d, exist_ok=True)
         print(f"✅ Directory ready: {d}/")
@@ -85,6 +106,7 @@ def run_all():
     check_gpu()
     check_ffmpeg()
     check_dependencies()
+    check_fonts()
     check_dirs()
     print("\n🏁 Pre-Flight Checks Completed.")
     print("If all checks are green (✅), you are ready to start the pipeline in Kaggle!")
