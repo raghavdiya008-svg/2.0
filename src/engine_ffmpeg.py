@@ -57,7 +57,7 @@ EMOJIS_DIR = os.path.join(_PROJECT_ROOT, "assets", "emojis")
 
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
-SPEED_FACTOR = 1.10
+SPEED_FACTOR = 1.0
 
 
 @dataclass
@@ -293,11 +293,12 @@ def build_slice_command(
     output_path: str,
     start: float,
     duration: float,
-    preset: str = "p1",
+    preset: str = "p4",
 ) -> List[str]:
     """
     Builds the FFmpeg command for the initial slicing pass.
-    Uses NVENC with -preset p1 (ultrafast) to bypass keyframe corruption traps.
+    Uses fast seek (-ss before -i) + single-pass NVENC hardware cutting (-cq 18 -preset p4)
+    with libx264 fast fallback to completely avoid keyframe/black-frame corruption and desync.
     """
     if is_nvenc_available():
         return [
@@ -309,6 +310,8 @@ def build_slice_command(
             "-cq", "18", "-b:v", "10M", "-maxrate", "14M", "-bufsize", "20M",
             *get_cfr_args(),
             "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
             "-af", "aresample=async=1",
             output_path,
         ]
@@ -318,10 +321,12 @@ def build_slice_command(
             "-ss", str(start), "-t", str(duration),
             "-i", input_path,
             "-vf", "scale='max(2,trunc(iw/2)*2)':'max(2,trunc(ih/2)*2)'",
-            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:v", "libx264", "-preset", "fast",
             "-crf", "18",
             *get_cfr_args(),
             "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
             "-af", "aresample=async=1",
             output_path,
         ]
@@ -332,13 +337,13 @@ def slice_clip(
     output_path: str,
     start: float,
     duration: float,
-    preset: str = "p1",
+    preset: str = "p4",
     check: bool = True,
     timeout: Optional[float] = 600.0,
 ) -> subprocess.CompletedProcess:
     """
-    Executes the initial slicing pass with NVENC -preset p1 (ultrafast)
-    with graceful CPU fallback to bypass keyframe corruption traps.
+    Executes the initial slicing pass with NVENC -preset p4 (or libx264 fast)
+    to bypass keyframe corruption traps and timestamp desync.
     Includes explicit subprocess timeout to prevent worker deadlock.
     """
     cmd = build_slice_command(input_path, output_path, start, duration, preset=preset)
@@ -518,6 +523,19 @@ def build_ffmpeg_command(
                 filter_complex_parts.append(
                     f"[s{i}_cam][s{i}_game]vstack=inputs=2[v_shot_{i}]"
                 )
+            elif shot_type == "blur_box":
+                # Multi-Face / Banter Wide shot: Centered 16:9 (1080x608) at y=656 over Gaussian blur background
+                filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_bg_raw][s{i}_fg_raw]")
+                filter_complex_parts.append(
+                    f"[s{i}_bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,scale='max(2,trunc(iw/2)*2)':'max(2,trunc(ih/2)*2)',"
+                    f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[s{i}_bg]"
+                )
+                filter_complex_parts.append(
+                    f"[s{i}_fg_raw]scale=1080:608:force_original_aspect_ratio=increase,crop=1080:608:(in_w-1080)/2:(in_h-608)/2[s{i}_fg]"
+                )
+                filter_complex_parts.append(
+                    f"[s{i}_bg][s{i}_fg]overlay=0:656:shortest=1[v_shot_{i}]"
+                )
             else:
                 zone = shot.get("zone") or {}
                 zx = max(0, int(round(zone.get("x", 0))))
@@ -533,7 +551,7 @@ def build_ffmpeg_command(
         concat_inputs = "".join(f"[v_shot_{i}]" for i in range(len(shots)))
         filter_complex_parts.append(f"{concat_inputs}concat=n={len(shots)}:v=1:a=0[comp_concat]")
         filter_complex_parts.append(
-            f"[comp_concat]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},{eq_filter},format=yuv420p[comp0]"
+            f"[comp_concat]fps=30,setpts=PTS-STARTPTS,{eq_filter},format=yuv420p[comp0]"
         )
 
     elif is_gaming_layout:
@@ -547,7 +565,7 @@ def build_ffmpeg_command(
         filter_complex_parts.append(f"{split_src}split=2[webcam_raw][game_raw]")
         
         webcam_chain = (
-            f"[webcam_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"[webcam_raw]fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop={ww}:{wh}:{wx}:{wy},"
             f"scale=1080:672:force_original_aspect_ratio=increase,"
@@ -555,7 +573,7 @@ def build_ffmpeg_command(
         )
         
         game_chain = (
-            f"[game_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"[game_raw]fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"scale=1080:1248:force_original_aspect_ratio=increase,"
             f"crop=1080:1248:(in_w-1080)/2:(in_h-1248)/2[game]"
@@ -589,7 +607,7 @@ def build_ffmpeg_command(
         filter_complex_parts.append(f"{split_src}split=2[top_raw][bot_raw]")
 
         top_chain = (
-            f"[top_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"[top_raw]fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop=w='min(iw,{tw})':h='min(ih,{th})':x='max(0,min({tx},iw-min(iw,{tw})))':y='max(0,min({ty},ih-min(ih,{th})))',"
             f"scale=1080:960:force_original_aspect_ratio=increase,"
@@ -597,7 +615,7 @@ def build_ffmpeg_command(
         )
 
         bot_chain = (
-            f"[bot_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"[bot_raw]fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop=w='min(iw,{bw})':h='min(ih,{bh})':x='max(0,min({bx},iw-min(iw,{bw})))':y='max(0,min({by},ih-min(ih,{bh})))',"
             f"scale=1080:960:force_original_aspect_ratio=increase,"
@@ -626,7 +644,7 @@ def build_ffmpeg_command(
         zh = max(2, int(round(zone.get("height", 1080) / 2.0)) * 2)
 
         filter_complex_parts.append(
-            f"{split_src}fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"{split_src}fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
             f"scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -638,7 +656,7 @@ def build_ffmpeg_command(
         # 1. Base blurred background canvas locked strictly to input video duration (prevents infinite stream bug)
         filter_complex_parts.append(f"{split_src}split=2[bg_raw][vid_raw]")
         filter_complex_parts.append(
-            f"[bg_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+            f"[bg_raw]fps=30,setpts=PTS-STARTPTS,"
             f"scale=1080:1920:force_original_aspect_ratio=increase,scale='max(2,trunc(iw/2)*2)':'max(2,trunc(ih/2)*2)',"
             f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[bg]"
         )
@@ -674,7 +692,7 @@ def build_ffmpeg_command(
             zoom_kfs = trajectory.get("zoom_keyframes", [])
 
             vid_chain = (
-                f"[vid_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+                f"[vid_raw]fps=30,setpts=PTS-STARTPTS,"
                 f"{eq_filter},"
                 f"scale=-2:{target_box_h},"
                 f"crop={target_box_w}:{target_box_h}:{x_crop_expr}:0"
@@ -697,9 +715,18 @@ def build_ffmpeg_command(
             )
 
             filter_complex_parts.append(f"[bg][vid]overlay={video_x}:{video_y}:shortest=1[comp0]")
+        elif layout == "blur_box" or (trajectory and trajectory.get("no_crop_scale_fit")):
+            # Multi-Face or wide full-canvas centered 16:9 frame over Gaussian blur background
+            filter_complex_parts.append(
+                f"[vid_raw]fps=30,setpts=PTS-STARTPTS,"
+                f"{eq_filter},"
+                f"scale=1080:608:force_original_aspect_ratio=increase,"
+                f"crop=1080:608:(in_w-1080)/2:(in_h-608)/2,format=yuv420p[vid_box]"
+            )
+            filter_complex_parts.append(f"[bg][vid_box]overlay=0:656:shortest=1[comp0]")
         else:
             filter_complex_parts.append(
-                f"[vid_raw]fps=30,setpts=PTS-STARTPTS,setpts=PTS/{speed},"
+                f"[vid_raw]fps=30,setpts=PTS-STARTPTS,"
                 f"{eq_filter},"
                 f"scale=1080:1920:force_original_aspect_ratio=increase,"
                 f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,format=yuv420p[vid_fill]"
@@ -773,33 +800,18 @@ def build_ffmpeg_command(
         except Exception:
             ass_path_escaped = str(ass_path).replace("\\", "/").replace(":", "\\\\:").replace("'", "'\\\\\\''")
 
-        if is_dual_speaker:
-            # Position subtitle overlays along the horizontal center seam (Y ≈ 960) with subtle padding
-            filter_complex_parts.append(
-                f"{current_label}subtitles='{ass_path_escaped}':force_style='Alignment=2,MarginV=960',format=yuv420p[vout]"
-            )
-        else:
-            filter_complex_parts.append(
-                f"{current_label}subtitles='{ass_path_escaped}',format=yuv420p[vout]"
-            )
+        # MarginV = 440 safe-zone lower third is standard across all layouts
+        filter_complex_parts.append(
+            f"{current_label}subtitles='{ass_path_escaped}',format=yuv420p[vout]"
+        )
     else:
         # Static drawtext header banners are completely purged
         filter_complex_parts.append(f"{current_label}null,format=yuv420p[vout]")
 
     filter_complex = ";".join(filter_complex_parts)
 
-    # Dynamic Audio Retiming (atempo chaining)
-    audio_filters = []
-    curr_speed = speed
-    while curr_speed > 2.0:
-        audio_filters.append("atempo=2.0")
-        curr_speed /= 2.0
-    while curr_speed < 0.5:
-        audio_filters.append("atempo=0.5")
-        curr_speed /= 0.5
-    audio_filters.append(f"atempo={round(curr_speed, 4)}")
-    audio_filters.append("aresample=async=1")
-    audio_filter_str = ",".join(audio_filters)
+    # Audio filter chain locked strictly to native playback without atempo retiming
+    audio_filter_str = "aresample=async=1"
 
     preset_val = opts.preset if opts.preset.startswith("p") else "p6"
     cq_val = getattr(opts, "cq", 20)
@@ -843,6 +855,7 @@ def build_ffmpeg_command(
         "-threads", str(opts.threads),
         "-c:a", "aac",
         "-b:a", opts.audio_bitrate,
+        "-ar", "48000",
         "-shortest",
         "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",

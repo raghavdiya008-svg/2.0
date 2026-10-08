@@ -624,11 +624,7 @@ def run_pipeline(
 
             slice_ass_path = os.path.join(temp_dir, f"slice_{idx}.ass")
             shot_tl = traj_data.get("shot_timeline")
-            is_pure_dual = bool(
-                traj_data.get("is_dual_speaker", False)
-                and traj_data.get("layout") == "dual_speaker_split"
-            )
-            ass_margin_v = 960 if is_pure_dual else caption_engine.MARGIN_V
+            ass_margin_v = caption_engine.MARGIN_V
 
             ass_path = caption_engine.generate_karaoke_ass(
                 words=slice_words,
@@ -651,7 +647,7 @@ def run_pipeline(
             }
             text_coords = {"x": 60, "y": 80, "font_size": 48, "text_content": ""}
             opts = engine_ffmpeg.RenderOptions(
-                speed=1.12, preset="p6", cq=18, crf=18, bg_color=bg_color,
+                speed=1.0, preset="p6", cq=18, crf=18, bg_color=bg_color,
                 strip_social_ui=strip_social_ui
             )
 

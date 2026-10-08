@@ -388,7 +388,7 @@ def detect_scene_cuts(
     video_path: str,
     start_time: float = 0.0,
     end_time: Optional[float] = None,
-    threshold: float = 20.0,
+    threshold: float = 22.0,
 ) -> List[float]:
     """
     Detects hard scene/shot transitions in a video within [start_time, end_time]
@@ -398,7 +398,7 @@ def detect_scene_cuts(
         video_path: Path to video file.
         start_time: Start offset in seconds (default 0.0).
         end_time: Optional end offset in seconds.
-        threshold: ContentDetector sensitivity threshold (default 20.0).
+        threshold: ContentDetector sensitivity threshold (default 22.0).
 
     Returns:
         List of cut timestamps in seconds, relative to start_time (timestamp offsets within the slice).
@@ -1434,22 +1434,47 @@ def calculate_tracking_trajectory(
     # =========================================================================
     # Shot-Aware Dynamic Framing:
     # Segment the slice by scene cuts and determine layout for EACH shot:
-    # - If a shot has genuine wide two-shot (both faces simultaneous >= 35%), layout is split_stack
-    # - If a shot is a close-up solo shot, layout is single (SmoothGlide centered on focal face)
+    # - In multi-shot clips, sample 5 evenly distributed frames across each shot interval
+    #   and compute the median face count.
+    # - If median count <= 1: solo shot -> type: "single" (9:16 SmoothGlide center tracking)
+    # - If median count >= 2: multi-face / wide shot -> type: "blur_box" (centered 16:9 on blur canvas)
+    # - Enforce hysteresis: merge shots with duration < 1.5s
     # =========================================================================
     clip_total_dur = sample_timestamps[-1] if sample_timestamps else (frame_count / fps if fps > 0 else 0.0)
 
-    # 1. Check if ANY shot contains wide two-speakers
-    # Build list of shot intervals: [0.0, cut1], [cut1, cut2], ... [cutN, clip_total_dur]
-    shot_boundaries = [0.0] + [c for c in clean_cuts if 0.0 < c < clip_total_dur] + [clip_total_dur]
+    # 1. Build initial raw shot intervals: [0.0, cut1], [cut1, cut2], ... [cutN, clip_total_dur]
+    raw_boundaries = [0.0] + [c for c in clean_cuts if 0.0 < c < clip_total_dur] + [clip_total_dur]
+    raw_intervals: List[Tuple[float, float]] = []
+    for si in range(len(raw_boundaries) - 1):
+        s_start = raw_boundaries[si]
+        s_end = raw_boundaries[si + 1]
+        if (s_end - s_start) >= 0.2:  # ignore micro sub-frame noise intervals
+            raw_intervals.append((s_start, s_end))
+
+    # Apply temporal hysteresis: merge any shot shorter than 1.5 seconds into adjacent shot
+    MIN_SHOT_DUR = 1.5
     shot_intervals: List[Tuple[float, float]] = []
-    for si in range(len(shot_boundaries) - 1):
-        s_start = shot_boundaries[si]
-        s_end = shot_boundaries[si + 1]
-        if (s_end - s_start) >= 0.3:  # ignore micro noise intervals < 0.3s
-            shot_intervals.append((s_start, s_end))
+    for interval in raw_intervals:
+        if not shot_intervals:
+            shot_intervals.append(interval)
+        else:
+            prev_start, prev_end = shot_intervals[-1]
+            curr_start, curr_end = interval
+            # If current or previous shot is less than 1.5s, merge them
+            if (curr_end - curr_start) < MIN_SHOT_DUR:
+                shot_intervals[-1] = (prev_start, curr_end)
+            elif (prev_end - prev_start) < MIN_SHOT_DUR:
+                shot_intervals[-1] = (prev_start, curr_end)
+            else:
+                shot_intervals.append(interval)
+
+    # Secondary pass to ensure trailing shot meets MIN_SHOT_DUR if possible
+    if len(shot_intervals) > 1 and (shot_intervals[-1][1] - shot_intervals[-1][0]) < MIN_SHOT_DUR:
+        last_start, last_end = shot_intervals.pop()
+        shot_intervals[-1] = (shot_intervals[-1][0], last_end)
 
     shot_timeline: List[Dict[str, Any]] = []
+    has_any_blur_box_shot = False
     has_any_split_shot = False
     has_any_single_shot = False
 
@@ -1458,6 +1483,19 @@ def calculate_tracking_trajectory(
         shot_frame_dets = [
             fd for fd in all_frame_detections if s_start <= fd[0] <= s_end
         ]
+        
+        # Sample 5 evenly distributed frames across this shot interval for face count evaluation
+        sample_counts = []
+        if shot_frame_dets:
+            n_samples = min(5, len(shot_frame_dets))
+            if n_samples == 1:
+                indices = [0]
+            else:
+                indices = [int(round(i * (len(shot_frame_dets) - 1) / (n_samples - 1))) for i in range(n_samples)]
+            for idx in indices:
+                sample_counts.append(len(shot_frame_dets[idx][1]))
+        median_faces = int(round(statistics.median(sample_counts))) if sample_counts else 1
+
         shot_speaker_turns = []
         if speaker_segments:
             for spk_seg in speaker_segments:
@@ -1473,8 +1511,17 @@ def calculate_tracking_trajectory(
             source_h=source_h,
         )
 
-        if shot_multi is not None:
-            # Wide two-shot: Stack 9:8
+        if median_faces >= 2:
+            # Multi-Face Wide / Banter scene: route to blur_box (centered 16:9 on blur canvas)
+            has_any_blur_box_shot = True
+            shot_timeline.append({
+                "start": round(s_start, 2),
+                "end": round(s_end, 2),
+                "type": "blur_box",
+                "camera": "wide",
+            })
+        elif shot_multi is not None:
+            # Explicit alternating dialogue split-stack
             has_any_split_shot = True
             top_c = shot_multi["top_crop"]
             bot_c = shot_multi["bottom_crop"]
@@ -1493,7 +1540,7 @@ def calculate_tracking_trajectory(
                 },
             })
         else:
-            # Solo shot: Find dominant face center in this shot
+            # Solo shot: Find dominant face center in this shot (SmoothGlide centered)
             has_any_single_shot = True
             shot_offsets = [
                 raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
@@ -1516,8 +1563,8 @@ def calculate_tracking_trajectory(
                 },
             })
 
-    # If the slice has mixed shots (e.g. wide split + solo closeups) OR pure multi-shot sequence with splits:
-    if has_any_split_shot and shot_timeline:
+    # If the slice has multiple shots or contains non-single layouts (blur_box or split_stack):
+    if (len(shot_intervals) > 1 or has_any_blur_box_shot or has_any_split_shot) and shot_timeline:
         # Merge adjacent identical shots
         merged_timeline: List[Dict[str, Any]] = []
         for s in shot_timeline:
@@ -1537,11 +1584,12 @@ def calculate_tracking_trajectory(
 
         print(
             f"[engine_vision] Shot-aware dynamic timeline generated | {len(merged_timeline)} shot(s) | "
+            f"blur_boxes={sum(1 for s in merged_timeline if s['type'] == 'blur_box')} | "
             f"splits={sum(1 for s in merged_timeline if s['type'] == 'split_stack')} | "
             f"solos={sum(1 for s in merged_timeline if s['type'] == 'single')}"
         )
 
-        # If EVERY shot in the entire clip was split_stack, we can use the high-performance dual_speaker_split directly
+        # If EVERY shot in the entire clip was split_stack, use dual_speaker_split directly
         if all(s["type"] == "split_stack" for s in merged_timeline):
             first_split = merged_timeline[0]
             top_z = first_split["top_zone"]
@@ -1568,7 +1616,26 @@ def calculate_tracking_trajectory(
                 "scene_cuts": clean_cuts,
             }
 
-        # Otherwise, we have a dynamic hybrid timeline (e.g. split on wide shot -> solo on close-up)
+        # If EVERY shot in the entire clip was blur_box, use blur_box layout directly
+        if all(s["type"] == "blur_box" for s in merged_timeline):
+            return {
+                "fps": fps,
+                "frame_count": frame_count,
+                "source_w": source_w,
+                "source_h": source_h,
+                "is_vertical": False,
+                "is_dual_speaker": False,
+                "layout": "blur_box",
+                "no_crop_scale_fit": True,
+                "x_offsets": [center_x],
+                "sample_timestamps": [0.0],
+                "keyframes": [{"time": 0.0, "x_offset": center_x}],
+                "best_x_offset": center_x,
+                "zoom_keyframes": [],
+                "scene_cuts": clean_cuts,
+            }
+
+        # Dynamic multi-shot timeline (e.g., solo close-ups and wide blur_box shots)
         return {
             "fps": fps,
             "frame_count": frame_count,

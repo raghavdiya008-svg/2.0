@@ -103,9 +103,9 @@
             const [batchId, setBatchId] = useState('');
             const [batchStatus, setBatchStatus] = useState(null);
             const [isRenderingBatch, setIsRenderingBatch] = useState(false);
-            const [renderSpeed, setRenderSpeed] = useState(1.10);
+            const [renderSpeed, setRenderSpeed] = useState(1.0);
             const [globalTitleY, setGlobalTitleY] = useState(130);
-            const [globalMarginV, setGlobalMarginV] = useState(580);
+            const [globalMarginV, setGlobalMarginV] = useState(440);
 
             // Virtual TV Director Preview & Reviewer State
             const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -526,7 +526,7 @@
                         body: JSON.stringify({
                             file_name: selectedVideo,
                             clips: clipsToRender,
-                            speed: renderSpeed || 1.10,
+                            speed: renderSpeed || 1.0,
                             watermark_logo: selectedLogo || null,
                             brand_logo: selectedLogo || null,
                             aspect_ratio: '9:16',
@@ -615,10 +615,10 @@
                         start: previewClip.start,
                         end: previewClip.end,
                         headline_text: extraParams.delete_title ? '' : (previewClip.hook_sentence || previewClip.title || ''),
-                        speed: renderSpeed || 1.10,
-                        speed_factor: renderSpeed || 1.10,
+                        speed: renderSpeed || 1.0,
+                        speed_factor: renderSpeed || 1.0,
                         title_y: extraParams.title_y || previewClip.title_y || 130,
-                        margin_v: extraParams.margin_v || previewClip.margin_v || (isDualShot ? 960 : 580),
+                        margin_v: extraParams.margin_v || previewClip.margin_v || 440,
                         delete_title: Boolean(extraParams.delete_title),
                         trajectory: {
                             layout: 'director_multizone',
@@ -1283,10 +1283,10 @@ Or Plain Text:
                                             onChange={(e) => setRenderSpeed(parseFloat(e.target.value))}
                                             className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-white font-mono text-xs focus:outline-none"
                                         >
-                                            <option value={1.0}>1.0x (Normal)</option>
+                                            <option value={1.0}>1.0x (Normal / Zero Drift)</option>
                                             <option value={1.08}>1.08x (Subtle)</option>
-                                            <option value={1.10}>1.10x (Optimal Viral Retiming)</option>
-                                            <option value={1.12}>1.12x (Fast)</option>
+                                            <option value={1.10}>1.10x (Fast)</option>
+                                            <option value={1.12}>1.12x (High)</option>
                                             <option value={1.15}>1.15x (Ultra)</option>
                                         </select>
                                     </div>
@@ -1311,15 +1311,15 @@ Or Plain Text:
                                         <span className="text-slate-400">Subtitle Y:</span>
                                         <input
                                             type="range"
-                                            min="400"
-                                            max="1100"
+                                            min="300"
+                                            max="900"
                                             step="20"
-                                            value={globalMarginV || 580}
+                                            value={globalMarginV || 440}
                                             onChange={(e) => setGlobalMarginV(parseInt(e.target.value))}
                                             className="w-16 h-1 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
                                         />
                                         <span className="font-mono text-blue-400 font-bold text-[11px]">
-                                            {globalMarginV === 960 ? '960px (Center)' : globalMarginV === 580 ? '580px (Bottom)' : `${globalMarginV || 580}px`}
+                                            {globalMarginV === 440 ? '440px (Safe Lower-Third)' : `${globalMarginV || 440}px`}
                                         </span>
                                     </div>
                                 </div>
@@ -2437,7 +2437,7 @@ Or Plain Text:
             const [titleY, setTitleY] = useState(clip?.title_y || 130);
             const [showTitle, setShowTitle] = useState(!clip?.delete_title);
             const isDual = Boolean(shots && shots.some(s => s.type === 'split_stack'));
-            const [marginV, setMarginV] = useState(clip?.margin_v || 580);
+            const [marginV, setMarginV] = useState(clip?.margin_v || 440);
 
             useEffect(() => {
                 if (clip) {
@@ -2787,22 +2787,22 @@ Or Plain Text:
                                             <button
                                                 type="button"
                                                 onClick={() => {
-                                                    setMarginV(960);
-                                                    onUpdateClipField('margin_v', 960);
+                                                    setMarginV(440);
+                                                    onUpdateClipField('margin_v', 440);
                                                 }}
-                                                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${marginV === 960 ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'}`}
+                                                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${marginV === 440 ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'}`}
                                             >
-                                                Center Seam (960px)
+                                                Lower Safe Zone (440px)
                                             </button>
                                             <button
                                                 type="button"
                                                 onClick={() => {
-                                                    setMarginV(580);
-                                                    onUpdateClipField('margin_v', 580);
+                                                    setMarginV(380);
+                                                    onUpdateClipField('margin_v', 380);
                                                 }}
-                                                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${marginV === 580 ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'}`}
+                                                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${marginV === 380 ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'}`}
                                             >
-                                                Lower Safe (580px)
+                                                Bottom Edge (380px)
                                             </button>
                                         </div>
                                     </div>

@@ -18,7 +18,7 @@ class TestCaptionAesthetics(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_header_typography_and_mobile_safe_zone(self):
-        """Verifies font, sizing, colors, heavy outline, deep shadow, and MarginV=580 in ASS header."""
+        """Verifies font, sizing, colors, heavy outline, deep shadow, and MarginV=440 in ASS header."""
         header = caption_engine._ass_header()
 
         # 1. High impact bold sans-serif font
@@ -30,8 +30,8 @@ class TestCaptionAesthetics(unittest.TestCase):
         # 3. Heavy 4.5px outline stroke and 3px deep shadow with Alignment=2 (bottom centered)
         self.assertIn("1,4.5,3,2,", header)
 
-        # 4. Mobile safe zone: MarginV=580
-        self.assertIn(",580,1", header)
+        # 4. Mobile safe zone: MarginV=440
+        self.assertIn(",440,1", header)
 
     def test_15_word_kinetic_sample_generation(self):
         """Generates an ASS script from a 15-word transcript and verifies centiseconds & phrase length."""

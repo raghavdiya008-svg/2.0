@@ -43,8 +43,83 @@ _llm_cache = {}                # SHA-256 local cache for scored windows
 # 1. validate_and_format_cuts  (unchanged contract)
 # ---------------------------------------------------------------------------
 
-def validate_and_format_cuts(raw_cuts: list, total_duration: float, min_duration: float = 20.0) -> list:
-    """Validates raw cut dictionaries and populates unified key aliases."""
+def snap_cuts_to_speech_boundaries(
+    cuts: list,
+    words: Optional[List[Dict[str, Any]]] = None,
+    silence_gaps: Optional[List[Tuple[float, float]]] = None,
+    tolerance: float = 0.5,
+) -> list:
+    """
+    Snaps candidate viral cut start and end timestamps to nearest WhisperX word boundaries
+    and VAD acoustic silence troughs to completely eliminate cutting off mid-syllable or mid-word.
+    """
+    if not cuts:
+        return []
+
+    try:
+        try:
+            import audio_intelligence
+        except ImportError:
+            import src.audio_intelligence as audio_intelligence
+    except Exception:
+        audio_intelligence = None
+
+    snapped_cuts = []
+    for c in cuts:
+        if not isinstance(c, dict):
+            continue
+        c_copy = dict(c)
+        s = float(c_copy.get("start", c_copy.get("start_time", 0.0)))
+        e = float(c_copy.get("end", c_copy.get("end_time", s + 30.0)))
+
+        # 1. Snap to nearest WhisperX word boundary
+        if words:
+            # Snap start to nearest word start within tolerance
+            best_s = s
+            min_s_diff = tolerance
+            for w in words:
+                w_s = float(w.get("start", 0.0))
+                if abs(w_s - s) <= min_s_diff:
+                    min_s_diff = abs(w_s - s)
+                    best_s = w_s
+
+            # Snap end to nearest word end within tolerance
+            best_e = e
+            min_e_diff = tolerance
+            for w in words:
+                w_e = float(w.get("end", 0.0))
+                if abs(w_e - e) <= min_e_diff:
+                    min_e_diff = abs(w_e - e)
+                    best_e = w_e
+
+            s = best_s
+            e = max(s + 1.0, best_e)
+
+        # 2. Snap to nearest acoustic trough / silence gap
+        if silence_gaps and audio_intelligence and hasattr(audio_intelligence, "snap_to_acoustic_trough"):
+            s = audio_intelligence.snap_to_acoustic_trough(s, silence_gaps, direction='backward', tolerance=tolerance)
+            e = audio_intelligence.snap_to_acoustic_trough(e, silence_gaps, direction='forward', tolerance=tolerance)
+
+        c_copy["start"] = round(s, 2)
+        c_copy["end"] = round(e, 2)
+        c_copy["start_time"] = round(s, 2)
+        c_copy["end_time"] = round(e, 2)
+        snapped_cuts.append(c_copy)
+
+    return snapped_cuts
+
+
+def validate_and_format_cuts(
+    raw_cuts: list,
+    total_duration: float,
+    min_duration: float = 20.0,
+    words: Optional[List[Dict[str, Any]]] = None,
+    silence_gaps: Optional[List[Tuple[float, float]]] = None,
+) -> list:
+    """Validates raw cut dictionaries, snaps boundaries to speech/words, and populates unified key aliases."""
+    if words or silence_gaps:
+        raw_cuts = snap_cuts_to_speech_boundaries(raw_cuts, words=words, silence_gaps=silence_gaps)
+
     validated = []
     for item in raw_cuts:
         if not isinstance(item, dict):
@@ -254,7 +329,7 @@ def _ensure_model_pulled(model: str = OLLAMA_MODEL) -> bool:
 
 
 def _unload_model_from_vram(model: str = OLLAMA_MODEL) -> None:
-    """Sends keep_alive=0 to evict the model from GPU memory."""
+    """Sends keep_alive=0 to evict the model from GPU memory and flushes CUDA cache."""
     try:
         import urllib.request
         data = json.dumps({"model": model, "keep_alive": 0}).encode()
@@ -269,6 +344,14 @@ def _unload_model_from_vram(model: str = OLLAMA_MODEL) -> None:
         logger.info(f"[curation] Model {model} unloaded from VRAM (keep_alive=0).")
     except Exception as exc:
         logger.debug(f"[curation] Model unload request failed (non-fatal): {exc}")
+    finally:
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +806,7 @@ def score_transcript_with_api(
 
     cuts = _parse_llm_json(raw_response, total_duration)
     if cuts:
-        validated = validate_and_format_cuts(cuts, total_duration)
+        validated = validate_and_format_cuts(cuts, total_duration, words=words, silence_gaps=silence_gaps)
         logger.info(f"[curation] Cloud API {provider} selected {len(validated)} validated viral cuts.")
         print(f"[curation] Cloud API {provider} selected {len(validated)} validated viral cuts.")
         _llm_cache[cache_key] = validated
@@ -838,7 +921,7 @@ def score_transcript_with_llm(
         return []
 
     # Validate and dedup through existing contract function
-    validated = validate_and_format_cuts(all_cuts, total_duration)
+    validated = validate_and_format_cuts(all_cuts, total_duration, words=words, silence_gaps=silence_gaps)
     logger.info(f"[curation] LLM curation complete: {len(validated)} validated segment(s).")
     return validated
 
@@ -1137,7 +1220,7 @@ def get_viral_cuts(
                     for c in llm_cuts:
                         c["curation_method"] = "llm_curated"
                         c["is_fallback"] = False
-                    llm_cuts = validate_and_format_cuts(llm_cuts, total_duration)
+                    llm_cuts = validate_and_format_cuts(llm_cuts, total_duration, words=words, silence_gaps=silence_gaps)
 
                 logger.info("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")
                 print("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")

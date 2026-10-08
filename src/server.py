@@ -300,7 +300,7 @@ class RenderRequest(BaseModel):
     emojis: Optional[List[Dict[str, Any]]] = []
     auto_adjust: Optional[float] = 0.0
     auto_color_correct: Optional[float] = 0.0
-    speed: float = Field(default=1.12, ge=0.5, le=2.0)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
     aspect_ratio: Optional[str] = None
     ass_path: Optional[str] = None
     trajectory: Optional[Dict[str, Any]] = None
@@ -337,7 +337,7 @@ class BatchRenderRequest(BaseModel):
     clips: List[Dict[str, Any]]
     watermark_logo: Optional[str] = None
     brand_logo: Optional[str] = None
-    speed: float = 1.10
+    speed: float = 1.0
     aspect_ratio: str = "9:16"
     audio_md5: Optional[str] = None
     title_y: Optional[int] = 130
@@ -499,7 +499,7 @@ def _run_render_job(job_data, **kwargs):
         job_data["trajectory"] = traj
 
         # 2. Determine Subtitle Safe Placement and Generate ASS
-        margin_v = int(job_data.get("margin_v") or 580)
+        margin_v = int(job_data.get("margin_v") or 440)
 
         if not job_data.get("ass_path") and clip_words:
             try:
@@ -516,7 +516,7 @@ def _run_render_job(job_data, **kwargs):
     output_path = os.path.join(OUTPUTS_DIR, output_filename)
     
     opts = RenderOptions(
-        speed=job_data.get("speed", 1.10),
+        speed=job_data.get("speed", 1.0),
         auto_adjust=job_data.get("auto_adjust", 0.0),
         auto_color_correct=job_data.get("auto_color_correct", 0.0)
     )
@@ -544,7 +544,7 @@ def _run_render_job(job_data, **kwargs):
             headline_text=final_headline,
             brand_logo_path=job_data.get("brand_logo_path"),
             watermark_logo_path=job_data.get("watermark_logo_path"),
-            speed_factor=job_data.get("speed_factor", job_data.get("speed", 1.10)),
+            speed_factor=job_data.get("speed_factor", job_data.get("speed", 1.0)),
         )
     finally:
         if slice_temp_file and os.path.isfile(slice_temp_file):
