@@ -7,12 +7,14 @@ torchaudio>=2.0.0
 insightface>=0.7.3
 onnxruntime>=1.16.0
 ultralytics>=8.0.0
+scenedetect[opencv]>=0.6.2
 opencv-python-headless>=4.8.0
 soundfile>=0.12.0
 scipy>=1.10.0
 numpy>=1.24.0,<2.0.0
 
 # Speech Recognition & Diarization
+whisperx
 faster-whisper>=1.0.0
 transformers>=4.30.0
 pyannote.audio>=3.1.0

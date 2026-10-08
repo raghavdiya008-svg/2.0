@@ -45,23 +45,33 @@ def check_ffmpeg():
         print("❌ FFmpeg check failed. Ensure ffmpeg is installed.")
         print("   -> In Kaggle: !apt-get update && apt-get install -y ffmpeg")
 
-def check_dependencies():
+def check_dependencies(auto_install=True):
     print("\n--- Python Dependencies Check ---")
+    is_cloud = os.path.exists("/kaggle") or "KAGGLE_KERNEL_RUN_TYPE" in os.environ or os.path.exists("/content")
     deps = {
-        "torch": "PyTorch",
-        "whisperx": "WhisperX",
-        "scenedetect": "PySceneDetect",
-        "insightface": "InsightFace",
-        "cv2": "OpenCV",
-        "fastapi": "FastAPI",
-        "pydantic": "Pydantic"
+        "torch": ("PyTorch", "torch"),
+        "whisperx": ("WhisperX", "whisperx"),
+        "scenedetect": ("PySceneDetect", "scenedetect[opencv]"),
+        "insightface": ("InsightFace", "insightface onnxruntime-gpu"),
+        "cv2": ("OpenCV", "opencv-python-headless"),
+        "fastapi": ("FastAPI", "fastapi"),
+        "pydantic": ("Pydantic", "pydantic")
     }
-    for module, name in deps.items():
+    for module, (name, pip_pkg) in deps.items():
         try:
             __import__(module)
-            print(f"✅ {name} ({module}) imported successfully.")
+            print(f"✅ {name} ({module}) ready.")
         except ImportError:
-            print(f"❌ Missing dependency: {name}. Run: !pip install {module}")
+            if is_cloud and auto_install:
+                print(f"🔄 Auto-installing missing dependency: {pip_pkg}...")
+                subprocess.run(f"{sys.executable} -m pip install {pip_pkg} -q", shell=True, check=False)
+                try:
+                    __import__(module)
+                    print(f"✅ {name} ({module}) installed and ready.")
+                except ImportError:
+                    print(f"❌ Failed to load {name} after install attempt.")
+            else:
+                print(f"❌ Missing dependency: {name}. Run: !pip install {pip_pkg}")
 
 def check_dirs():
     print("\n--- Directory Structure Check ---")

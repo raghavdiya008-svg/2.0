@@ -56,7 +56,8 @@ def setup_kaggle_environment():
         "mediapipe",
         "soundfile",
         "python-dotenv",
-        "pyannote.audio"
+        "pyannote.audio",
+        "scenedetect[opencv]"
     ]
     
     if is_kaggle:
@@ -86,7 +87,8 @@ def setup_kaggle_environment():
             "mediapipe": "mediapipe",
             "soundfile": "soundfile",
             "python-dotenv": "dotenv",
-            "pyannote.audio": "pyannote.audio"
+            "pyannote.audio": "pyannote.audio",
+            "scenedetect[opencv]": "scenedetect"
         }
         for pkg in dependencies:
             imp_name = import_map.get(pkg, pkg)
