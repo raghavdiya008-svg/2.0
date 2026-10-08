@@ -65,16 +65,10 @@ def check_dependencies():
 
 def check_dirs():
     print("\n--- Directory Structure Check ---")
-    expected_dirs = ["inputs", "outputs", "temp", "models", "fonts"]
+    expected_dirs = ["inputs", "outputs", "temp", "models"]
     for d in expected_dirs:
         os.makedirs(d, exist_ok=True)
         print(f"✅ Directory ready: {d}/")
-    
-    # Check for font
-    if not os.path.exists("fonts/TheBoldFont.ttf"):
-        print("⚠️ WARNING: fonts/TheBoldFont.ttf not found. Subtitles may fail to render or fallback to default.")
-    else:
-        print("✅ Font found: fonts/TheBoldFont.ttf")
 
 def run_all():
     print("🚀 Starting Kaggle Pre-Flight Checks for Autonomous Video Pipeline...\n")
