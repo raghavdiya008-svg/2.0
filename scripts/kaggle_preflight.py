@@ -108,6 +108,19 @@ def check_dirs():
         os.makedirs(d, exist_ok=True)
         print(f"✅ Directory ready: {d}/")
 
+def check_tunnel():
+    print("\n--- Cloudflare Tunnel Check ---")
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+        import tunnel
+        bin_path = tunnel.get_cloudflared_binary()
+        if bin_path and os.path.exists(bin_path):
+            print(f"✅ Cloudflare tunnel binary ready: {bin_path}")
+        else:
+            print("⚠️ Cloudflare tunnel binary could not be prepared automatically.")
+    except Exception as e:
+        print(f"⚠️ Tunnel check warning: {e}")
+
 def run_all():
     print("🚀 Starting Kaggle Pre-Flight Checks for Autonomous Video Pipeline...\n")
     check_gpu()
@@ -115,6 +128,7 @@ def run_all():
     check_dependencies()
     check_fonts()
     check_dirs()
+    check_tunnel()
     print("\n🏁 Pre-Flight Checks Completed.")
     print("If all checks are green (✅), you are ready to start the pipeline in Kaggle!")
 
