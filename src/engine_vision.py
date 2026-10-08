@@ -1511,33 +1511,14 @@ def calculate_tracking_trajectory(
             source_h=source_h,
         )
 
-        if median_faces >= 2:
-            # Multi-Face Wide / Banter scene: route to blur_box (centered 16:9 on blur canvas)
+        if median_faces >= 2 or shot_multi is not None:
+            # Multi-Face Wide / Banter scene: route strictly to blur_box (centered 16:9 on blur canvas)
             has_any_blur_box_shot = True
             shot_timeline.append({
                 "start": round(s_start, 2),
                 "end": round(s_end, 2),
                 "type": "blur_box",
                 "camera": "wide",
-            })
-        elif shot_multi is not None:
-            # Explicit alternating dialogue split-stack
-            has_any_split_shot = True
-            top_c = shot_multi["top_crop"]
-            bot_c = shot_multi["bottom_crop"]
-            shot_timeline.append({
-                "start": round(s_start, 2),
-                "end": round(s_end, 2),
-                "type": "split_stack",
-                "camera": "split",
-                "top_zone": {
-                    "id": "zone_host", "label": "Host",
-                    "x": top_c["x"], "y": top_c["y"], "width": top_c["w"], "height": top_c["h"]
-                },
-                "bot_zone": {
-                    "id": "zone_guest", "label": "Guest",
-                    "x": bot_c["x"], "y": bot_c["y"], "width": bot_c["w"], "height": bot_c["h"]
-                },
             })
         else:
             # Solo shot: Find dominant face center in this shot (SmoothGlide centered)
@@ -1588,33 +1569,6 @@ def calculate_tracking_trajectory(
             f"splits={sum(1 for s in merged_timeline if s['type'] == 'split_stack')} | "
             f"solos={sum(1 for s in merged_timeline if s['type'] == 'single')}"
         )
-
-        # If EVERY shot in the entire clip was split_stack, use dual_speaker_split directly
-        if all(s["type"] == "split_stack" for s in merged_timeline):
-            first_split = merged_timeline[0]
-            top_z = first_split["top_zone"]
-            bot_z = first_split["bot_zone"]
-            return {
-                "fps": fps,
-                "frame_count": frame_count,
-                "source_w": source_w,
-                "source_h": source_h,
-                "is_vertical": False,
-                "is_dual_speaker": True,
-                "layout": "dual_speaker_split",
-                "dual_speaker_layout": {
-                    "layout": "dual_speaker_split",
-                    "is_dual_speaker": True,
-                    "top_crop": {"x": top_z["x"], "y": top_z["y"], "w": top_z["width"], "h": top_z["height"]},
-                    "bottom_crop": {"x": bot_z["x"], "y": bot_z["y"], "w": bot_z["width"], "h": bot_z["height"]},
-                },
-                "x_offsets": [center_x],
-                "sample_timestamps": [0.0],
-                "keyframes": [{"time": 0.0, "x_offset": center_x}],
-                "best_x_offset": center_x,
-                "zoom_keyframes": [],
-                "scene_cuts": clean_cuts,
-            }
 
         # If EVERY shot in the entire clip was blur_box, use blur_box layout directly
         if all(s["type"] == "blur_box" for s in merged_timeline):

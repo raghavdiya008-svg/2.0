@@ -473,22 +473,19 @@ def _run_render_job(job_data, **kwargs):
             traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
 
         if not traj.get("shot_timeline") and not traj.get("layout"):
-            # Check for explicitly saved HITL CameraFramingConfig
-            saved_cfg = camera_framing.CameraFramingConfig.load(video_filename)
-            if not saved_cfg:
-                saved_cfg = camera_framing.CameraFramingConfig.load(base)
+            # Only use saved multi-zone camera framing if explicitly requested in job_data
+            if job_data.get("layout") == "director_multizone":
+                saved_cfg = camera_framing.CameraFramingConfig.load(video_filename) or camera_framing.CameraFramingConfig.load(base)
+                if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
+                    try:
+                        tv_director = director.TVDirector(saved_cfg)
+                        shots = tv_director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
+                        if shots and any(s.get("type") == "split_stack" for s in shots):
+                            traj = {"layout": "director_multizone", "shot_timeline": shots}
+                    except Exception as e:
+                        logger.warning(f"[server] Auto TV director fallback: {e}")
 
-            # If user explicitly configured multi-zone broadcast in the UI:
-            if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
-                try:
-                    tv_director = director.TVDirector(saved_cfg)
-                    shots = tv_director.direct_clip(clip_words, clip_start=0.0, clip_end=dur_f, use_ollama=False)
-                    if shots and any(s.get("type") == "split_stack" for s in shots):
-                        traj = {"layout": "director_multizone", "shot_timeline": shots}
-                except Exception as e:
-                    logger.warning(f"[server] Auto TV director fallback: {e}")
-
-            # If no multi-zone shots, execute AI vision face tracking (InsightFace SCRFD + SmoothGlide)
+            # By default: Execute Master Production Engineering Plan (InsightFace SCRFD + SmoothGlide + Smart Blur Box)
             if not traj.get("shot_timeline") and not traj.get("layout"):
                 try:
                     import engine_vision
