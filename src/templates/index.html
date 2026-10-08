@@ -720,23 +720,27 @@
 
                         {/* Dependency Status Indicator */}
                         <div className="flex items-center gap-3">
-                            {depsStatus && (
-                                <div className="flex items-center gap-2 text-xs">
-                                    <span className={`w-2 h-2 rounded-full ${depsStatus.all_installed ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                                    <span className="text-slate-400">
-                                        {depsStatus.all_installed ? 'Engines Ready' : `${depsStatus.missing.length} Deps Missing`}
-                                    </span>
-                                    {!depsStatus.all_installed && (
-                                        <button
-                                            onClick={() => checkDependencies(true)}
-                                            disabled={isInstallingDeps}
-                                            className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-[11px] font-medium transition"
-                                        >
-                                            {isInstallingDeps ? 'Installing...' : 'Auto-Install'}
-                                        </button>
-                                    )}
-                                </div>
-                            )}
+                            {depsStatus && (() => {
+                                const isReady = Boolean(depsStatus.all_installed || (depsStatus.missing_modules && depsStatus.missing_modules.length === 0));
+                                const missingCount = (depsStatus.missing_modules ? depsStatus.missing_modules.length : (depsStatus.missing ? depsStatus.missing.length : 0));
+                                return (
+                                    <div className="flex items-center gap-2 text-xs">
+                                        <span className={`w-2 h-2 rounded-full ${isReady ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                                        <span className="text-slate-400">
+                                            {isReady ? 'Engines Ready' : `${missingCount} Deps Missing`}
+                                        </span>
+                                        {!isReady && (
+                                            <button
+                                                onClick={() => checkDependencies(true)}
+                                                disabled={isInstallingDeps}
+                                                className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-[11px] font-medium transition"
+                                            >
+                                                {isInstallingDeps ? 'Installing...' : 'Auto-Install'}
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })()}
                         </div>
                     </header>
 
@@ -755,6 +759,7 @@
                                 isIngesting={isIngesting}
                                 isCurating={isCurating}
                                 handleIngestAndCurate={handleIngestAndCurate}
+                                handleRunAutoCuration={handleRunAutoCuration}
                                 ingestData={ingestData}
                                 consoleLogs={consoleLogs}
                                 pipelineStage={pipelineStage}
@@ -914,7 +919,7 @@ Or Plain Text:
             remoteUrl, setRemoteUrl,
             videos, selectedVideo, setSelectedVideo,
             logos, selectedLogo, setSelectedLogo,
-            isIngesting, isCurating, handleIngestAndCurate,
+            isIngesting, isCurating, handleIngestAndCurate, handleRunAutoCuration,
             ingestData, consoleLogs, pipelineStage, pipelineProgress,
             curatedClips, selectedClipIndices, toggleClipSelection,
             selectTopN, selectHighVirality,
@@ -2943,9 +2948,51 @@ Or Plain Text:
             );
         }
 
+        // Error Boundary to catch and display UI errors instead of going blank
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+            componentDidCatch(error, errorInfo) {
+                console.error("2.0 Studio UI Error:", error, errorInfo);
+            }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="min-h-screen bg-[#090d16] text-white flex flex-col items-center justify-center p-6 text-center">
+                            <div className="max-w-md bg-slate-900 border border-red-500/40 rounded-2xl p-6 shadow-2xl space-y-4">
+                                <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-400 mx-auto flex items-center justify-center text-xl font-bold">
+                                    ⚠️
+                                </div>
+                                <h2 className="text-lg font-bold text-red-300">Studio Render Exception</h2>
+                                <p className="text-xs font-mono text-slate-300 bg-black/40 p-3 rounded-lg border border-slate-800 break-words text-left">
+                                    {String(this.state.error?.message || this.state.error || "Unknown Error")}
+                                </p>
+                                <button
+                                    onClick={() => window.location.reload()}
+                                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition active:scale-95"
+                                >
+                                    Reload Studio
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
         // Mount React application
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(
+            <ErrorBoundary>
+                <App />
+            </ErrorBoundary>
+        );
     </script>
 </body>
 </html>
