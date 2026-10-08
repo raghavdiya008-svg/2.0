@@ -532,7 +532,7 @@ def build_ffmpeg_command(
                     f"scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_bot]"
                 )
                 filter_complex_parts.append(
-                    f"[s{i}_top][s{i}_bot]vstack=inputs=2,drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill[v_shot_{i}]"
+                    f"[s{i}_top][s{i}_bot]vstack=inputs=2,drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill,setsar=1,format=yuv420p[v_shot_{i}]"
                 )
             elif shot_type == "gaming":
                 cam_z = shot.get("facecam_zone") or shot.get("top_zone") or {}
@@ -550,7 +550,7 @@ def build_ffmpeg_command(
                     f"[s{i}_game_raw]scale=1080:1248:force_original_aspect_ratio=increase,crop=1080:1248:(in_w-1080)/2:(in_h-1248)/2[s{i}_game]"
                 )
                 filter_complex_parts.append(
-                    f"[s{i}_cam][s{i}_game]vstack=inputs=2[v_shot_{i}]"
+                    f"[s{i}_cam][s{i}_game]vstack=inputs=2,setsar=1,format=yuv420p[v_shot_{i}]"
                 )
             elif shot_type == "blur_box":
                 # Multi-Face / Banter Wide shot: Centered 16:9 (1080x608) at y=656 over Gaussian blur background
@@ -563,7 +563,7 @@ def build_ffmpeg_command(
                     f"[s{i}_fg_raw]scale=1080:608:force_original_aspect_ratio=increase,crop=1080:608:(in_w-1080)/2:(in_h-608)/2[s{i}_fg]"
                 )
                 filter_complex_parts.append(
-                    f"[s{i}_bg][s{i}_fg]overlay=0:656:shortest=1[v_shot_{i}]"
+                    f"[s{i}_bg][s{i}_fg]overlay=0:656:shortest=1,setsar=1,format=yuv420p[v_shot_{i}]"
                 )
             else:
                 zone = shot.get("zone") or {}
@@ -574,7 +574,7 @@ def build_ffmpeg_command(
                 filter_complex_parts.append(
                     f"[raw_s{i}]{trim_filter},"
                     f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
-                    f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[v_shot_{i}]"
+                    f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1,format=yuv420p[v_shot_{i}]"
                 )
 
         concat_inputs = "".join(f"[v_shot_{i}]" for i in range(len(shots)))
