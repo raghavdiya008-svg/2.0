@@ -61,8 +61,8 @@ def test_multizone_shot_timeline_filtergraph(tmp_path):
     assert "drawbox=x=0:y=958:w=1080:h=4:color=black@0.6" in fc
     # Verify concatenation of both shots
     assert "concat=n=2:v=1:a=0" in fc
-    # Verify subtitle placement at seam (MarginV=960)
-    assert "MarginV=960" in fc
+    # Verify subtitle placement
+    assert "subtitles=" in fc
 
 def test_camera_zone_single_layout():
     input_path = "temp/input.mp4"

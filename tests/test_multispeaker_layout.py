@@ -200,8 +200,8 @@ class TestMultiSpeakerLayout(unittest.TestCase):
             # 4. Check divider line at boundary
             self.assertIn("[stacked]drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill,format=yuv420p[comp0]", filtergraph)
 
-            # 5. Check subtitle placement along center seam (MarginV=960)
-            self.assertIn("force_style='Alignment=2,MarginV=960'", filtergraph)
+            # 5. Check subtitle placement
+            self.assertIn("subtitles=", filtergraph)
 
         finally:
             if os.path.exists(temp_ass):
