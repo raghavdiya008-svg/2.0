@@ -269,8 +269,12 @@ class RenderQueueManager:
                     job.status = "COMPLETED"
                 except Exception as e:
                     job.status = "FAILED"
-                    job.error = str(e)
-                    logger.error(f"[task_queue] Job {job.job_id} failed during execution: {e}", exc_info=True)
+                    err_msg = getattr(e, "stderr", None)
+                    if err_msg and str(err_msg).strip():
+                        job.error = f"{e}\nDetails: {str(err_msg).strip()}"
+                    else:
+                        job.error = str(e)
+                    logger.error(f"[task_queue] Job {job.job_id} failed during execution: {job.error}", exc_info=True)
         except Exception as outer_e:
             # Handles failure inside vram_guard __enter__ or __exit__
             job.status = "FAILED"

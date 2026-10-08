@@ -19,6 +19,10 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 import functools
+import uuid
+import logging
+
+logger = logging.getLogger("engine_ffmpeg")
 
 @functools.lru_cache(maxsize=1)
 def get_cfr_args() -> list:
@@ -138,6 +142,31 @@ def escape_ffmpeg_drawtext(text: str) -> str:
     text = text.replace(";", "\\;")
     text = text.replace("%", "\\%")
     return text
+
+
+@functools.lru_cache(maxsize=1)
+def get_system_font_path() -> Optional[str]:
+    """Finds an available bold sans-serif TrueType font for drawtext across Linux/Kaggle, Windows, and macOS."""
+    candidates = [
+        # Linux / Kaggle / Colab / Debian / Ubuntu
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        # Windows
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/segoeui.ttf",
+        # macOS
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial Bold.ttf",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
 
 
 def wrap_headline_text(text: str, max_chars_per_line: int = 24) -> str:
@@ -767,22 +796,47 @@ def build_ffmpeg_command(
         current_label = "[comp_wm]"
 
     # 5. Optional Hook Headline Banner (Centered multi-line pill with auto-wrapping)
+    temp_text_file = None
     if headline and str(headline).strip():
         wrapped_title = wrap_headline_text(str(headline).strip(), max_chars_per_line=24)
-        escaped_title = escape_ffmpeg_drawtext(wrapped_title)
         line_count = len(wrapped_title.split("\n"))
         f_size = 48 if line_count > 1 else 54
-        filter_complex_parts.append(
-            f"{current_label}drawtext=text='{escaped_title}':"
-            f"x=(w-text_w)/2:y=130:fontsize={f_size}:fontcolor=white:line_spacing=12:"
-            f"box=1:boxcolor=black@0.75:boxborderw=20[comp_title]"
-        )
+
+        temp_dir = os.path.join(_PROJECT_ROOT, "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_text_file = os.path.join(temp_dir, f"headline_{uuid.uuid4().hex[:8]}.txt")
+        try:
+            with open(temp_text_file, "w", encoding="utf-8") as f:
+                f.write(wrapped_title)
+        except Exception as e:
+            logger.warning(f"[engine_ffmpeg] Failed writing headline textfile: {e}")
+            temp_text_file = None
+
+        font_path = get_system_font_path()
+        font_opt = ""
+        if font_path:
+            font_esc = os.path.abspath(font_path).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
+            font_opt = f"fontfile='{font_esc}':"
+
+        if temp_text_file and os.path.isfile(temp_text_file):
+            txt_esc = os.path.abspath(temp_text_file).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
+            filter_complex_parts.append(
+                f"{current_label}drawtext={font_opt}textfile='{txt_esc}':"
+                f"x=(w-text_w)/2:y=130:fontsize={f_size}:fontcolor=white:line_spacing=12:"
+                f"box=1:boxcolor=black@0.75:boxborderw=20[comp_title]"
+            )
+        else:
+            escaped_title = escape_ffmpeg_drawtext(wrapped_title)
+            filter_complex_parts.append(
+                f"{current_label}drawtext={font_opt}text='{escaped_title}':"
+                f"x=(w-text_w)/2:y=130:fontsize={f_size}:fontcolor=white:line_spacing=12:"
+                f"box=1:boxcolor=black@0.75:boxborderw=20[comp_title]"
+            )
         current_label = "[comp_title]"
 
     # Emojis Composite completely removed as per Phase 3 configuration
 
     # 6. Burn ASS Subtitles (Purged debug banners: only render styled .ass karaoke subtitles)
-    temp_text_file = None
     has_valid_subtitles = (
         ass_path is not None
         and bool(str(ass_path).strip())
@@ -791,14 +845,9 @@ def build_ffmpeg_command(
         and _has_dialogue_events(ass_path)
     )
     if has_valid_subtitles:
-        try:
-            rel_ass = os.path.relpath(ass_path).replace("\\", "/")
-            if not rel_ass.startswith("../") and not rel_ass.startswith("..\\"):
-                ass_path_escaped = rel_ass.replace("'", "'\\\\\\''")
-            else:
-                ass_path_escaped = str(ass_path).replace("\\", "/").replace(":", "\\\\:").replace("'", "'\\\\\\''")
-        except Exception:
-            ass_path_escaped = str(ass_path).replace("\\", "/").replace(":", "\\\\:").replace("'", "'\\\\\\''")
+        # Full absolute path properly escaped so subprocess working directory changes never break subtitle loading
+        abs_ass = os.path.abspath(ass_path).replace("\\", "/")
+        ass_path_escaped = abs_ass.replace(":", "\\:").replace("'", "'\\\\\\''")
 
         # MarginV = 440 safe-zone lower third is standard across all layouts
         filter_complex_parts.append(
@@ -924,7 +973,7 @@ def render_clip(
     )
 
     try:
-        proc = subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout, cwd=_PROJECT_ROOT)
         return proc
     except subprocess.CalledProcessError as e:
         # Graceful CPU fallback if NVENC is unavailable (e.g. non-NVIDIA host/local dev)
@@ -960,9 +1009,15 @@ def render_clip(
                 fallback_cmd.pop(r_idx)
                 fallback_cmd.pop(r_idx)
                 
-            proc = subprocess.run(fallback_cmd, check=check, capture_output=True, text=True, timeout=timeout)
-            return proc
-        raise
+            try:
+                proc = subprocess.run(fallback_cmd, check=check, capture_output=True, text=True, timeout=timeout, cwd=_PROJECT_ROOT)
+                return proc
+            except subprocess.CalledProcessError as fallback_e:
+                fb_err = (fallback_e.stderr or "").strip() or (fallback_e.stdout or "").strip()
+                raise RuntimeError(f"FFmpeg CPU fallback failed (exit {fallback_e.returncode}): {fb_err}") from fallback_e
+
+        clean_err = (e.stderr or "").strip() or (e.stdout or "").strip()
+        raise RuntimeError(f"FFmpeg render failed (exit {e.returncode}): {clean_err}") from e
     except subprocess.TimeoutExpired as e:
         print(f"[engine_ffmpeg] Error: Render timed out after {timeout}s: {' '.join(cmd)}")
         raise
