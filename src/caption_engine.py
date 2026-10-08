@@ -222,8 +222,8 @@ def generate_karaoke_ass(
     outline_color: str = COLOR_OUTLINE,
     back_color: str = COLOR_SHADOW,
     margin_v: int = MARGIN_V,
-    max_words_per_line: int = 3,
-    max_chars_per_line: int = 24,
+    max_words_per_line: int = 4,
+    max_chars_per_line: int = 28,
     gap_threshold_sec: float = 0.45,
     shot_timeline: Optional[List[Dict[str, Any]]] = None,
     **kwargs,
@@ -307,8 +307,8 @@ def generate_karaoke_ass(
         current_line.append({**w, "word": word_text})
         current_len += len(word_text) + 1
 
-        # Break early on terminal punctuation if we have at least 2 words
-        if len(current_line) >= 2 and word_text.endswith(('.', '?', '!', ':', ';')):
+        # Break early on terminal sentence punctuation if we have at least 3 words
+        if len(current_line) >= 3 and word_text.endswith(('.', '?', '!')):
             lines.append(current_line)
             current_line = []
             current_len = 0

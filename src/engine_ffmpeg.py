@@ -172,10 +172,10 @@ def get_system_font_path() -> Optional[str]:
     return None
 
 
-def wrap_headline_text(text: str, max_chars_per_line: int = 24) -> str:
+def wrap_headline_text(text: str, max_chars_per_line: int = 32) -> str:
     """
-    Wraps headline text into clean, centered multi-line text (max 2-3 lines)
-    so long titles never truncate or clip off the left/right screen edges.
+    Wraps headline text into clean, centered multi-line text (max 2 lines)
+    so titles format elegantly in minimalist style without awkward 2-word breaks.
     """
     words = str(text or "").strip().split()
     if not words:
@@ -194,8 +194,7 @@ def wrap_headline_text(text: str, max_chars_per_line: int = 24) -> str:
             cur_len = len(w)
     if cur_line:
         lines.append(" ".join(cur_line))
-    # Cap at 3 lines
-    return "\n".join(lines[:3])
+    return "\n".join(lines[:2])
 
 
 # ---------------------------------------------------------------------------
@@ -801,9 +800,9 @@ def build_ffmpeg_command(
     # 5. Optional Hook Headline Banner (Centered multi-line pill with auto-wrapping)
     temp_text_file = None
     if headline and str(headline).strip():
-        wrapped_title = wrap_headline_text(str(headline).strip(), max_chars_per_line=24)
+        wrapped_title = wrap_headline_text(str(headline).strip(), max_chars_per_line=32)
         line_count = len(wrapped_title.split("\n"))
-        f_size = 48 if line_count > 1 else 54
+        f_size = 42 if line_count > 1 else 46
 
         temp_dir = os.path.join(_PROJECT_ROOT, "temp")
         os.makedirs(temp_dir, exist_ok=True)
@@ -825,15 +824,15 @@ def build_ffmpeg_command(
             txt_esc = os.path.abspath(temp_text_file).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
             filter_complex_parts.append(
                 f"{current_label}drawtext={font_opt}textfile='{txt_esc}':"
-                f"x=(w-text_w)/2:y=110:fontsize={f_size}:fontcolor=white:line_spacing=12:"
-                f"box=1:boxcolor=black@0.80:boxborderw=16:enable='between(t,0,4.5)'[comp_title]"
+                f"x=(w-text_w)/2:y=90:fontsize={f_size}:fontcolor=white:line_spacing=10:"
+                f"box=1:boxcolor=black@0.65:boxborderw=14:enable='between(t,0,4.5)'[comp_title]"
             )
         else:
             escaped_title = escape_ffmpeg_drawtext(wrapped_title)
             filter_complex_parts.append(
                 f"{current_label}drawtext={font_opt}text='{escaped_title}':"
-                f"x=(w-text_w)/2:y=110:fontsize={f_size}:fontcolor=white:line_spacing=12:"
-                f"box=1:boxcolor=black@0.80:boxborderw=16:enable='between(t,0,4.5)'[comp_title]"
+                f"x=(w-text_w)/2:y=90:fontsize={f_size}:fontcolor=white:line_spacing=10:"
+                f"box=1:boxcolor=black@0.65:boxborderw=14:enable='between(t,0,4.5)'[comp_title]"
             )
         current_label = "[comp_title]"
 

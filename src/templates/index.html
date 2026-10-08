@@ -333,50 +333,18 @@
                     }
                     fetchAssets(); // Refresh video list
                     setIsIngesting(false);
+                    setPipelineStage('ready');
+                    setPipelineProgress(100);
 
-                    // Step 2: High-Volume Curation Engine via async background task
-                    setIsCurating(true);
-                    setPipelineStage('curation');
+                    setConsoleLogs(prev => [
+                        ...prev,
+                        `[INGEST SUCCESS] Video "${ingestResult.file_name}" downloaded in pristine HD (1440p/1080p).`,
+                        `[READY] Skipped unwanted auto-curation. Opening timestamps modal to import your custom clips.`
+                    ]);
 
-                    const curatePid = 'c_' + Math.random().toString(36).substring(2, 9);
-                    setProcessId(curatePid);
-
-                    const curateRes = await fetch('/api/curate', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            file_name: ingestResult.file_name || selectedVideo,
-                            audio_md5: ingestResult.audio_md5 || null,
-                            process_id: curatePid,
-                            min_score: 75,
-                            async_mode: true
-                        })
-                    });
-
-                    if (!curateRes.ok) {
-                        const errDetail = await parseResponseError(curateRes);
-                        throw new Error(errDetail);
-                    }
-
-                    const curateDataInitial = await curateRes.json();
-                    let curateResult = curateDataInitial;
-                    if (curateDataInitial.status === 'queued') {
-                        curateResult = await pollUntilDone(curatePid, 'curation');
-                    }
-
-                    if (!curateResult) {
-                        throw new Error('Curation completed without returning clip data.');
-                    }
-
-                    setCuratedClips(curateResult.clips || []);
-                    setTargetClipsCount(curateResult.target_clips || 0);
-                    setLowYieldWarning(curateResult.low_yield_warning || false);
-                    setYieldMessage(curateResult.message || '');
-
-                    // Auto-select Top 5 by default
-                    const topIndices = (curateResult.clips || []).slice(0, 5).map((_, i) => i);
-                    setSelectedClipIndices(topIndices);
-
+                    // Immediately open timestamps input modal so user pastes their .json directly
+                    setImportError('');
+                    setImportModalOpen(true);
                 } catch (err) {
                     setConsoleLogs(prev => [...prev, `[ERROR] ${err.message}`]);
                     setPipelineStage('error');
@@ -390,6 +358,50 @@
                 setSelectedClipIndices(prev => 
                     prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
                 );
+            };
+
+            const handleRunAutoCuration = async () => {
+                if (!selectedVideo || isIngesting || isCurating) return;
+                try {
+                    setIsCurating(true);
+                    setPipelineStage('curation');
+                    setPipelineProgress(10);
+                    const curatePid = 'c_' + Math.random().toString(36).substring(2, 9);
+                    setProcessId(curatePid);
+
+                    const curateRes = await fetch('/api/curate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            file_name: selectedVideo,
+                            audio_md5: (ingestData && ingestData.audio_md5) ? ingestData.audio_md5 : null,
+                            process_id: curatePid,
+                            min_score: 75,
+                            async_mode: true
+                        })
+                    });
+                    if (!curateRes.ok) {
+                        const errDetail = await parseResponseError(curateRes);
+                        throw new Error(errDetail);
+                    }
+                    const curateDataInitial = await curateRes.json();
+                    let curateResult = curateDataInitial;
+                    if (curateDataInitial.status === 'queued') {
+                        curateResult = await pollUntilDone(curatePid, 'curation');
+                    }
+                    if (curateResult) {
+                        setCuratedClips(curateResult.clips || []);
+                        setTargetClipsCount(curateResult.target_clips || 0);
+                        setLowYieldWarning(curateResult.low_yield_warning || false);
+                        setYieldMessage(curateResult.message || '');
+                        setSelectedClipIndices((curateResult.clips || []).slice(0, 5).map((_, i) => i));
+                    }
+                } catch (err) {
+                    setErrorMessage(err.message || 'Auto-curation failed.');
+                } finally {
+                    setIsCurating(false);
+                    setPipelineStage('ready');
+                }
             };
 
             const selectTopN = (n) => {
@@ -999,17 +1011,12 @@ Or Plain Text:
                                     {isIngesting ? (
                                         <>
                                             <Icon name="loader-2" className="w-4 h-4 animate-spin" />
-                                            Ingesting Media...
-                                        </>
-                                    ) : isCurating ? (
-                                        <>
-                                            <Icon name="sparkles" className="w-4 h-4 animate-spin" />
-                                            Curating Viral Moments...
+                                            Downloading HD Video...
                                         </>
                                     ) : (
                                         <>
-                                            <Icon name="play" className="w-4 h-4" />
-                                            Run High-Volume Pipeline
+                                            <Icon name="download" className="w-4 h-4" />
+                                            Download Video & Input Timestamps (.json)
                                         </>
                                     )}
                                 </button>
@@ -1065,18 +1072,27 @@ Or Plain Text:
                                 <Icon name="sparkles" className="w-5 h-5" />
                             </div>
                             <div>
-                                <h3 className="text-sm font-bold text-white">Import Gemini Curated Clips</h3>
+                                <h3 className="text-sm font-bold text-white">Import Timestamps (.json)</h3>
                                 <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
-                                    Skip local LLM curation! Paste your Gemini batch timestamps directly to render 40+ clips with zero GPU wait time.
+                                    Paste your Gemini/custom batch timestamps directly to render clips instantly with zero GPU wait time.
                                 </p>
                             </div>
-                            <button
-                                type="button"
-                                onClick={onOpenImportModal}
-                                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-blue-500/20 active:scale-95"
-                            >
-                                + Import Gemini Batch
-                            </button>
+                            <div className="flex items-center justify-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={onOpenImportModal}
+                                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-blue-500/20 active:scale-95"
+                                >
+                                    + Input Timestamps (.json)
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleRunAutoCuration}
+                                    className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition active:scale-95"
+                                >
+                                    Or Run AI Auto-Curation
+                                </button>
+                            </div>
                         </div>
                     )}
 
