@@ -467,6 +467,26 @@ def _run_render_job(job_data, **kwargs):
                         "end": max(0.1, we - start_f)
                     })
 
+        # CRITICAL FAILSAFE: If words are not available, run on-the-fly WhisperX ASR on the sliced segment!
+        if not clip_words and not job_data.get("ass_path"):
+            try:
+                import audio_intelligence
+                slice_wav = os.path.join(TEMP_DIR, f"slice_asr_{uuid.uuid4().hex[:8]}.wav")
+                audio_intelligence.extract_audio(active_input_path, slice_wav)
+                if os.path.isfile(slice_wav):
+                    logger.info(f"[server] Running on-the-fly WhisperX ASR on slice ({dur_f:.1f}s)...")
+                    raw_words = audio_intelligence.run_whisperx_alignment(slice_wav, language="en")
+                    if os.path.isfile(slice_wav):
+                        try:
+                            os.remove(slice_wav)
+                        except Exception:
+                            pass
+                    if raw_words:
+                        clip_words = raw_words
+                        logger.info(f"[server] On-the-fly ASR extracted {len(clip_words)} words for clip {start_f}-{end_f}")
+            except Exception as asr_err:
+                logger.warning(f"[server] On-the-fly WhisperX ASR for clip slice failed: {asr_err}")
+
         # 1. Resolve Camera Framing / TV Director Trajectory UNCONDITIONALLY
         traj = job_data.get("trajectory") or {}
         if not traj.get("shot_timeline") and job_data.get("shot_timeline"):
@@ -1046,13 +1066,22 @@ def api_render_batch(req: BatchRenderRequest):
             import audio_intelligence
             audio_intelligence.extract_audio(video_path, temp_wav)
             md5 = pipeline.compute_audio_stream_md5(temp_wav)
-            if os.path.isfile(temp_wav):
-                os.remove(temp_wav)
             cached = pipeline._load_audio_cache(md5)
             if cached and "words" in cached:
                 cached_words = cached["words"]
+            else:
+                # Transcribe full audio once so all batch clips share the word-level transcript!
+                logger.info(f"[server] Audio cache miss for batch. Running WhisperX ASR on {safe_name}...")
+                cached_words = audio_intelligence.run_whisperx_alignment(temp_wav, language="en")
+                if cached_words:
+                    pipeline._save_audio_cache(md5, {"words": cached_words, "silence_gaps": []})
+            if os.path.isfile(temp_wav):
+                try:
+                    os.remove(temp_wav)
+                except Exception:
+                    pass
         except Exception as e:
-            logger.warning(f"[server] Could not probe audio cache for batch: {e}")
+            logger.warning(f"[server] Could not probe or run WhisperX ASR for batch: {e}")
 
     with _batch_lock:
         _batches[batch_id] = {

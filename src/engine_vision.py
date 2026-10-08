@@ -1511,15 +1511,59 @@ def calculate_tracking_trajectory(
             source_h=source_h,
         )
 
-        if median_faces >= 2 or shot_multi is not None:
-            # Multi-Face Wide / Banter scene: route strictly to blur_box (centered 16:9 on blur canvas)
-            has_any_blur_box_shot = True
+        if shot_multi is not None and "dual_speaker_layout" in shot_multi:
+            dsl = shot_multi["dual_speaker_layout"]
+            top_c = dsl["top_crop"]
+            bot_c = dsl["bottom_crop"]
+            has_any_split_shot = True
             shot_timeline.append({
                 "start": round(s_start, 2),
                 "end": round(s_end, 2),
-                "type": "blur_box",
-                "camera": "wide",
+                "type": "split_stack",
+                "camera": "podcast_split",
+                "top_zone": {
+                    "id": "zone_top", "label": "Host",
+                    "x": top_c["x"], "y": top_c["y"], "width": top_c["w"], "height": top_c["h"]
+                },
+                "bot_zone": {
+                    "id": "zone_bot", "label": "Guest",
+                    "x": bot_c["x"], "y": bot_c["y"], "width": bot_c["w"], "height": bot_c["h"]
+                }
             })
+        elif median_faces >= 2:
+            # Check for left/right spatial separation to use 9:8 split-stack for two-speaker conversations
+            left_xs = [d["center"][0] for d in shot_frame_dets if d.get("center") and d["center"][0] < source_w * 0.48]
+            right_xs = [d["center"][0] for d in shot_frame_dets if d.get("center") and d["center"][0] > source_w * 0.52]
+            if left_xs and right_xs and (statistics.median(right_xs) - statistics.median(left_xs)) >= (source_w * 0.20):
+                med_l = statistics.median(left_xs)
+                med_r = statistics.median(right_xs)
+                target_w_98 = max(2, int(round(source_h * 9.0 / 8.0) // 2) * 2)
+                target_w_98 = min(source_w, target_w_98)
+                xa = max(0, min(int(round(med_l - target_w_98 / 2.0)), source_w - target_w_98))
+                xb = max(0, min(int(round(med_r - target_w_98 / 2.0)), source_w - target_w_98))
+                has_any_split_shot = True
+                shot_timeline.append({
+                    "start": round(s_start, 2),
+                    "end": round(s_end, 2),
+                    "type": "split_stack",
+                    "camera": "podcast_split",
+                    "top_zone": {
+                        "id": "zone_top", "label": "Speaker 1",
+                        "x": xa, "y": 0, "width": target_w_98, "height": source_h
+                    },
+                    "bot_zone": {
+                        "id": "zone_bot", "label": "Speaker 2",
+                        "x": xb, "y": 0, "width": target_w_98, "height": source_h
+                    }
+                })
+            else:
+                has_any_blur_box_shot = True
+                shot_timeline.append({
+                    "start": round(s_start, 2),
+                    "end": round(s_end, 2),
+                    "type": "blur_box",
+                    "camera": "wide",
+                })
         else:
             # Solo shot: Find dominant face center in this shot (SmoothGlide centered)
             has_any_single_shot = True
