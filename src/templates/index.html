@@ -1560,7 +1560,16 @@ Or Plain Text:
             const [duration, setDuration] = useState(0);
             const [showLivePreview, setShowLivePreview] = useState(true);
             const videoRef = useRef(null);
+            const previewVideoRef = useRef(null);
             const svgRef = useRef(null);
+
+            useEffect(() => {
+                if (previewVideoRef.current && Math.abs(previewVideoRef.current.currentTime - currentTime) > 0.1) {
+                    try {
+                        previewVideoRef.current.currentTime = currentTime;
+                    } catch (e) {}
+                }
+            }, [currentTime]);
 
             // Interactive Drag-to-Select Tool State
             // 'select': move/resize existing | 'draw': drag on video to create new box
@@ -2379,8 +2388,8 @@ Or Plain Text:
                                             }}
                                         >
                                             <video
+                                                ref={previewVideoRef}
                                                 src={`/inputs/${encodeURIComponent(activeVideo)}`}
-                                                currentTime={currentTime}
                                                 className="w-full h-full object-cover pointer-events-none"
                                                 playsInline
                                                 muted

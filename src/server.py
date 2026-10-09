@@ -773,6 +773,12 @@ def index():
             return HTMLResponse(content=f.read())
     return HTMLResponse(content="<h1>2.0 Video Pipeline</h1><p>index.html not found</p>")
 
+@app.get("/favicon.ico")
+def favicon():
+    """Serves a clean inline SVG emoji favicon."""
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎬</text></svg>'
+    return Response(content=svg, media_type="image/svg+xml")
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "2.0 Video Pipeline", "nvenc": is_nvenc_available()}
