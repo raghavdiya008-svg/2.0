@@ -1360,14 +1360,16 @@ def calculate_tracking_trajectory(
                     sb = (int(bx * inv), int(by * inv), int(bw * inv), int(bh * inv))
                     sc = (fd.landmark_center[0] * inv, fd.landmark_center[1] * inv) if fd.landmark_center else None
                     cy = sb[1] + sb[3] / 2.0
+                    min_face_dim = max(24, int(source_h * 0.035))
                     # Suppress false positives on floor, table edge, or microscopic noise
-                    if cy < source_h * 0.75 and sb[2] >= 60 and sb[3] >= 60:
+                    if cy < source_h * 0.75 and sb[2] >= min_face_dim and sb[3] >= min_face_dim:
                         scaled_detections.append(FaceDetection(box=sb, landmarks=None, landmark_center=sc, score=fd.score))
                 face_detections = scaled_detections
             else:
+                min_face_dim = max(24, int(source_h * 0.035))
                 face_detections = [
                     fd for fd in face_detections
-                    if (fd.box[1] + fd.box[3] / 2.0) < source_h * 0.75 and fd.box[2] >= 60 and fd.box[3] >= 60
+                    if (fd.box[1] + fd.box[3] / 2.0) < source_h * 0.75 and fd.box[2] >= min_face_dim and fd.box[3] >= min_face_dim
                 ]
 
             all_frame_detections.append((timestamp, [fd.box for fd in face_detections]))
@@ -1505,6 +1507,17 @@ def calculate_tracking_trajectory(
                 sample_counts.append(len(shot_frame_dets[idx][1]))
         median_faces = int(round(statistics.median(sample_counts))) if sample_counts else 1
 
+        shot_centers = []
+        for item in shot_frame_dets:
+            if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[1], list):
+                for b in item[1]:
+                    if isinstance(b, (tuple, list)) and len(b) >= 4:
+                        shot_centers.append(b[0] + b[2] / 2.0)
+                    elif isinstance(b, dict) and "center" in b:
+                        shot_centers.append(b["center"][0])
+            elif isinstance(item, dict) and "center" in item:
+                shot_centers.append(item["center"][0])
+
         shot_speaker_turns = []
         if speaker_segments:
             for spk_seg in speaker_segments:
@@ -1560,17 +1573,6 @@ def calculate_tracking_trajectory(
             })
         elif median_faces >= 2:
             # Check for left/right spatial separation to use 9:8 split-stack for two-speaker conversations
-            shot_centers = []
-            for item in shot_frame_dets:
-                if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[1], list):
-                    for b in item[1]:
-                        if isinstance(b, (tuple, list)) and len(b) >= 4:
-                            shot_centers.append(b[0] + b[2] / 2.0)
-                        elif isinstance(b, dict) and "center" in b:
-                            shot_centers.append(b["center"][0])
-                elif isinstance(item, dict) and "center" in item:
-                    shot_centers.append(item["center"][0])
-
             left_xs = [cx for cx in shot_centers if cx < source_w * 0.48]
             right_xs = [cx for cx in shot_centers if cx > source_w * 0.52]
             if left_xs and right_xs and (statistics.median(right_xs) - statistics.median(left_xs)) >= (source_w * 0.15):

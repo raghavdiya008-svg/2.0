@@ -202,7 +202,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
         cookies_path = _find_cookies_file()
         max_h = os.environ.get("MAX_DOWNLOAD_HEIGHT", "1440")
-        format_spec = f"bestvideo[height<={max_h}]+bestaudio/bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best"
+        format_spec = f"bestvideo[height<={max_h}][height>=720]+bestaudio/bestvideo[height<={max_h}]+bestaudio/bestvideo+bestaudio/best"
         ydl_opts = {
             "format": format_spec,
             "merge_output_format": "mp4",

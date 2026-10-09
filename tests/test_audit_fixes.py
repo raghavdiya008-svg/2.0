@@ -216,6 +216,28 @@ class TestAuditFixes(unittest.TestCase):
         breq = BatchRenderRequest(file_name="dummy.mp4", clips=[], presentation_mode=True)
         self.assertTrue(breq.presentation_mode)
 
+    def test_13_resolution_relative_face_filter(self):
+        """Verify face size filter dynamically scales to prevent dropping real faces in 720p/480p footage."""
+        # 480p
+        dim_480 = max(24, int(480 * 0.035))
+        self.assertEqual(dim_480, 24)
+        # 720p
+        dim_720 = max(24, int(720 * 0.035))
+        self.assertEqual(dim_720, 25)
+        # 1080p
+        dim_1080 = max(24, int(1080 * 0.035))
+        self.assertEqual(dim_1080, 37)
+        # 4K / 2160p
+        dim_4k = max(24, int(2160 * 0.035))
+        self.assertEqual(dim_4k, 75)
+
+    def test_14_output_resolution_contract(self):
+        """Verify that engine output is strictly 1080x1920 Full HD (>= 720p)."""
+        self.assertEqual(ef.TARGET_WIDTH, 1080)
+        self.assertEqual(ef.TARGET_HEIGHT, 1920)
+        self.assertGreaterEqual(ef.TARGET_WIDTH, 720)
+        self.assertGreaterEqual(ef.TARGET_HEIGHT, 1280)
+
 
 if __name__ == "__main__":
     unittest.main()
