@@ -887,6 +887,7 @@ def build_ffmpeg_command(
             "-c:v", "h264_nvenc",
             "-preset", str(preset_val),
             "-tune", str(tune_val),
+            "-rc", str(rc_val),
             "-cq", str(cq_val),
             "-b:v", str(bitrate_val),
             "-maxrate", str(maxrate_val),
