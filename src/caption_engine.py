@@ -262,6 +262,7 @@ def generate_karaoke_ass(
         w for w in (words or [])
         if isinstance(w, dict) and str(w.get("word", "")).strip()
     ]
+    valid_words.sort(key=lambda w: float(w.get("start", 0.0) if w.get("start") is not None else 0.0))
     if not valid_words:
         print("[WARN] Caption generation failed — proceeding without subtitles")
         return None

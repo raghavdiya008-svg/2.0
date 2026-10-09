@@ -545,8 +545,13 @@ def _run_render_job(job_data, **kwargs):
                     traj = engine_vision.calculate_tracking_trajectory(active_input_path)
                 except Exception as e:
                     logger.warning(f"[server] engine_vision trajectory calculation failed: {e}")
-                    traj = {}
         job_data["trajectory"] = traj
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
         # 2. Determine Subtitle Safe Placement and Generate ASS
         margin_v = int(job_data.get("margin_v") or 440)
