@@ -2956,7 +2956,7 @@ Or Plain Text:
                                                         <div
                                                             key={sIdx}
                                                             onClick={() => seekTo(clip.start + shot.start)}
-                                                            style={{ width: `${shotPct}%` }}
+                                                            style={{ width: shotPct + '%' }}
                                                             className={`${bg} h-full border-r border-slate-900/60 transition-all ${isCurrent ? 'opacity-100 ring-2 ring-white z-10' : 'opacity-70 hover:opacity-90'}`}
                                                             title={`${shot.camera || shot.type}: ${shot.start.toFixed(1)}s - ${shot.end.toFixed(1)}s`}
                                                         />
@@ -2997,6 +2997,7 @@ Or Plain Text:
                                                     </div>
                                                 );
                                             })}
+                                            </div>
                                         </div>
                                     )}
                                 </div>
