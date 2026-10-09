@@ -1295,6 +1295,14 @@ def api_get_progress(process_id: str):
 # Legacy Assets and Canvas Endpoints (Maintained for Backward Compatibility)
 # ---------------------------------------------------------------------------
 
+def _get_disk_free_gb() -> float:
+    try:
+        import shutil
+        _, _, free = shutil.disk_usage(os.getcwd())
+        return round(free / (1024**3), 2)
+    except Exception:
+        return 999.0
+
 @app.get("/list_assets")
 def list_assets():
     """Lists available input videos and logo presets."""
@@ -1311,10 +1319,37 @@ def list_assets():
             f for f in os.listdir(LOGO_DIR)
             if f.lower().endswith(('.png', '.jpg', '.jpeg')) and "verified" not in f.lower()
         ])
+    
+    try:
+        from media_downloader import _find_cookies_file
+        has_cookies = bool(_find_cookies_file())
+    except Exception:
+        has_cookies = False
         
     return {
         "videos": videos,
-        "logos": logos
+        "logos": logos,
+        "has_cookies": has_cookies,
+        "free_disk_gb": _get_disk_free_gb(),
+    }
+
+@app.post("/api/cleanup_temp")
+def api_cleanup_temp():
+    """Purges intermediate temp files to free disk space on Kaggle."""
+    purged_count = 0
+    if os.path.isdir(TEMP_DIR):
+        for f in os.listdir(TEMP_DIR):
+            fpath = os.path.join(TEMP_DIR, f)
+            if os.path.isfile(fpath) and (f.startswith("slice_") or f.startswith("subtitles_") or f.endswith(".wav") or f.endswith(".ass")):
+                try:
+                    os.remove(fpath)
+                    purged_count += 1
+                except Exception:
+                    pass
+    return {
+        "status": "success",
+        "purged_files": purged_count,
+        "free_disk_gb": _get_disk_free_gb(),
     }
 
 @app.get("/logos")

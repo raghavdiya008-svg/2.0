@@ -122,6 +122,10 @@
             const [importAppendMode, setImportAppendMode] = useState(true);
             const [importError, setImportError] = useState('');
 
+            // Kaggle Environment & Cookies State
+            const [hasCookies, setHasCookies] = useState(false);
+            const [freeDiskGb, setFreeDiskGb] = useState(999);
+
             // Fetch available assets and check dependencies on mount
             useEffect(() => {
                 fetchAssets();
@@ -178,6 +182,8 @@
                         const data = await res.json();
                         setVideos(data.videos || []);
                         setLogos(data.logos || []);
+                        setHasCookies(Boolean(data.has_cookies));
+                        if (data.free_disk_gb !== undefined) setFreeDiskGb(data.free_disk_gb);
                         if (data.videos && data.videos.length > 0 && !selectedVideo) {
                             setSelectedVideo(data.videos[0]);
                         }
@@ -185,6 +191,44 @@
                 } catch (e) {
                     console.error("Failed to fetch assets:", e);
                 }
+            };
+
+            const handleCookiesUpload = async (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                    const res = await fetch('/upload', { method: 'POST', body: formData });
+                    if (res.ok) {
+                        setHasCookies(true);
+                        setConsoleLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] YouTube cookies.txt uploaded and active.`]);
+                    }
+                } catch (err) {
+                    console.error("Cookies upload error:", err);
+                }
+            };
+
+            const handleCleanupTemp = async () => {
+                try {
+                    const res = await fetch('/api/cleanup_temp', { method: 'POST' });
+                    if (res.ok) {
+                        const data = await res.json();
+                        setFreeDiskGb(data.free_disk_gb);
+                        setConsoleLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Purged ${data.purged_files} intermediate files. Free space: ${data.free_disk_gb} GB.`]);
+                    }
+                } catch (err) {
+                    console.error("Cleanup error:", err);
+                }
+            };
+
+            const togglePresentationMode = (clipIdx) => {
+                setCuratedClips(prev => prev.map((c, idx) => {
+                    if (idx === clipIdx) {
+                        return { ...c, presentation_mode: !c.presentation_mode };
+                    }
+                    return c;
+                }));
             };
 
             const checkDependencies = async (autoInstall = false) => {
@@ -788,6 +832,11 @@
                                 setGlobalTitleY={setGlobalTitleY}
                                 globalMarginV={globalMarginV}
                                 setGlobalMarginV={setGlobalMarginV}
+                                hasCookies={hasCookies}
+                                freeDiskGb={freeDiskGb}
+                                onCookiesUpload={handleCookiesUpload}
+                                onCleanupTemp={handleCleanupTemp}
+                                onTogglePresentationMode={togglePresentationMode}
                             />
                         ) : (
                             <CameraFramingStudioTabContent
@@ -928,7 +977,8 @@ Or Plain Text:
             handleStartBatchRender, isRenderingBatch, batchStatus, batchId,
             depsStatus, onCheckDeps, onInstallDeps, isInstallingDeps,
             onOpenDirectorPreview, onOpenImportModal,
-            globalTitleY, setGlobalTitleY, globalMarginV, setGlobalMarginV
+            globalTitleY, setGlobalTitleY, globalMarginV, setGlobalMarginV,
+            hasCookies, freeDiskGb, onCookiesUpload, onCleanupTemp, onTogglePresentationMode
         }) {
             const consoleBottomRef = useRef(null);
 
@@ -964,6 +1014,22 @@ Or Plain Text:
                             )}
                         </div>
 
+                        {freeDiskGb < 4.0 && (
+                            <div className="mb-4 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-center justify-between text-xs text-amber-200">
+                                <span className="flex items-center gap-2">
+                                    <Icon name="hard-drive" className="w-4 h-4 text-amber-400" />
+                                    Low Kaggle disk space: <strong>{freeDiskGb} GB</strong> remaining.
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={onCleanupTemp}
+                                    className="px-2.5 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-100 rounded-lg font-semibold transition"
+                                >
+                                    Purge Temp Slices
+                                </button>
+                            </div>
+                        )}
+
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             {/* URL Ingestion */}
                             <div className="space-y-2">
@@ -982,7 +1048,15 @@ Or Plain Text:
                                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition"
                                     />
                                 </div>
-                                <p className="text-[11px] text-slate-500">Auto-downloaded via yt-dlp / gdown</p>
+                                <div className="flex items-center justify-between text-[11px] pt-1">
+                                    <span className="text-slate-500">Auto-downloaded via yt-dlp</span>
+                                    <label className="cursor-pointer inline-flex items-center gap-1.5 text-xs px-2.5 py-0.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition" title="Upload cookies.txt to bypass YouTube bot detection on Kaggle">
+                                        <input type="file" accept=".txt" className="hidden" onChange={onCookiesUpload} />
+                                        <span className={hasCookies ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
+                                            {hasCookies ? "🍪 cookies.txt: Active" : "⚠️ Attach cookies.txt"}
+                                        </span>
+                                    </label>
+                                </div>
                             </div>
 
                             {/* Local Ingestion */}
@@ -1271,7 +1345,18 @@ Or Plain Text:
                                             </div>
 
                                             <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
-                                                <span className="text-slate-400 font-mono text-[10px]">9:16 Kinetic Reel</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (onTogglePresentationMode) onTogglePresentationMode(index);
+                                                    }}
+                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition ${clip.presentation_mode ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-white'}`}
+                                                    title="Toggle between 9:16 portrait tracking and 16:9 tutorial slide preservation"
+                                                >
+                                                    <Icon name={clip.presentation_mode ? "monitor" : "film"} className="w-3.5 h-3.5" />
+                                                    {clip.presentation_mode ? "16:9 Presentation" : "9:16 Auto Director"}
+                                                </button>
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {
@@ -1426,15 +1511,21 @@ Or Plain Text:
                                                 <video
                                                     src={job.result.download_url}
                                                     controls
-                                                    className="w-full max-h-48 rounded-lg bg-black object-contain"
+                                                    muted
+                                                    preload="metadata"
+                                                    playsInline
+                                                    className="w-full aspect-[9/16] max-h-64 rounded-xl bg-black object-contain shadow-md border border-slate-800"
                                                 />
-                                                <a
-                                                    href={job.result.download_url}
-                                                    download
-                                                    className="block w-full py-2 bg-slate-800 hover:bg-slate-700 text-center text-xs font-semibold text-white rounded-lg transition"
-                                                >
-                                                    Download MP4
-                                                </a>
+                                                <div className="flex gap-2">
+                                                    <a
+                                                        href={job.result.download_url}
+                                                        download
+                                                        className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-center text-xs font-bold text-white rounded-xl transition flex items-center justify-center gap-1.5 shadow-md shadow-blue-600/20"
+                                                    >
+                                                        <Icon name="download" className="w-3.5 h-3.5" />
+                                                        Download MP4
+                                                    </a>
+                                                </div>
                                             </div>
                                         )}
 
@@ -2851,7 +2942,29 @@ Or Plain Text:
                                             No director cuts planned yet.
                                         </div>
                                     ) : (
-                                        <div className="space-y-1.5 max-h-[140px] overflow-y-auto custom-scrollbar pr-1">
+                                        <div className="space-y-2">
+                                            {/* Visual Multi-Camera Timeline Strip */}
+                                            <div className="w-full h-4 rounded-lg bg-slate-950 border border-slate-800 flex overflow-hidden cursor-pointer" title="Multi-Camera Cut Strip (Click to seek)">
+                                                {shots.map((shot, sIdx) => {
+                                                    const clipDur = Math.max(0.1, clip.end - clip.start);
+                                                    const shotPct = Math.max(1, ((shot.end - shot.start) / clipDur) * 100);
+                                                    const isCurrent = activeShot === shot;
+                                                    const bg = shot.type === 'split_stack' ? 'bg-purple-500' :
+                                                               shot.camera === 'zone_host' ? 'bg-blue-500' :
+                                                               shot.camera === 'zone_guest' ? 'bg-emerald-500' : 'bg-amber-500';
+                                                    return (
+                                                        <div
+                                                            key={sIdx}
+                                                            onClick={() => seekTo(clip.start + shot.start)}
+                                                            style={{ width: `${shotPct}%` }}
+                                                            className={`${bg} h-full border-r border-slate-900/60 transition-all ${isCurrent ? 'opacity-100 ring-2 ring-white z-10' : 'opacity-70 hover:opacity-90'}`}
+                                                            title={`${shot.camera || shot.type}: ${shot.start.toFixed(1)}s - ${shot.end.toFixed(1)}s`}
+                                                        />
+                                                    );
+                                                })}
+                                            </div>
+
+                                            <div className="space-y-1.5 max-h-[140px] overflow-y-auto custom-scrollbar pr-1">
                                             {shots.map((shot, sIdx) => {
                                                 const shotDur = (shot.end - shot.start).toFixed(1);
                                                 const isCurrent = activeShot === shot;
