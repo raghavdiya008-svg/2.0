@@ -19,7 +19,10 @@ Emoji Mapper:
 
 import os
 import re
+import logging
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -267,7 +270,15 @@ def generate_karaoke_ass(
         print("[WARN] Caption generation failed — proceeding without subtitles")
         return None
 
-    os.makedirs(os.path.dirname(os.path.abspath(output_ass_path)), exist_ok=True)
+    # Check if words contain non-Latin Unicode scripts (e.g. Hindi, CJK, Cyrillic, Arabic)
+    has_non_latin = any(
+        any(ord(c) > 0x024F for c in str(w.get("word", "")))
+        for w in valid_words[:100]
+    )
+    if has_non_latin and str(font_name).lower() in ("anton", "theboldfont"):
+        # Anton and TheBoldFont only contain Latin glyphs. Fallback cleanly to universal multi-script font
+        font_name = "Arial" if os.name == "nt" else "DejaVu Sans"
+        logger.info(f"[caption_engine] Non-Latin script detected. Falling back to universal {font_name} font.")
 
     header = _ass_header(
         font_name=font_name,

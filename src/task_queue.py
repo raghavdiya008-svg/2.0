@@ -261,6 +261,7 @@ class RenderQueueManager:
             except Exception:
                 pass
         self._update_job_status(job.job_id, "running")
+        print(f"[task_queue] >>> [Heartbeat] Starting render job {job.job_id}...", flush=True)
 
         try:
             with self.vram_guard(label=job.job_id):
@@ -282,6 +283,8 @@ class RenderQueueManager:
             logger.error(f"[task_queue] Job {job.job_id} failed in VRAM guardian / execution envelope: {outer_e}", exc_info=True)
         finally:
             job.completed_at = time.time()
+            dur = round(job.completed_at - job.started_at, 1)
+            print(f"[task_queue] <<< [Heartbeat] Job {job.job_id} {job.status.lower()} in {dur}s.", flush=True)
             if job.status == "COMPLETED":
                 payload_data = {"kwargs": job.kwargs, "result": job.result}
                 self._update_job_status(job.job_id, "completed", payload=payload_data)

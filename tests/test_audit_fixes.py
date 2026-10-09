@@ -243,6 +243,38 @@ class TestAuditFixes(unittest.TestCase):
         res = ai.run_whisper_fallback_local("nonexistent.wav")
         self.assertIsInstance(res, list)
 
+    def test_16_non_latin_unicode_font_fallback(self):
+        """Verify that non-Latin words trigger universal font fallback instead of Latin-only Anton."""
+        import tempfile
+        unicode_words = [
+            {"word": "नमस्ते", "start": 0.0, "end": 0.5},
+            {"word": "दुनिया", "start": 0.5, "end": 1.0},
+        ]
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
+            p = f.name
+        try:
+            res_path = cap.generate_karaoke_ass(unicode_words, p, font_name="Anton")
+            self.assertIsNotNone(res_path)
+            with open(res_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # Font should not be Anton because Anton has no Devanagari glyphs
+            self.assertNotIn("Style: Default,Anton,", content)
+            self.assertTrue("Arial" in content or "DejaVu Sans" in content)
+        finally:
+            if os.path.isfile(p):
+                os.remove(p)
+
+    def test_17_proactive_disk_guard_cleanup(self):
+        """Verify _get_disk_free_gb returns a valid float and api_cleanup_temp runs cleanly."""
+        from server import _get_disk_free_gb, api_cleanup_temp
+        free_gb = _get_disk_free_gb()
+        self.assertIsInstance(free_gb, float)
+        self.assertGreater(free_gb, 0.0)
+
+        cleanup_res = api_cleanup_temp()
+        self.assertEqual(cleanup_res.get("status"), "success")
+        self.assertIn("free_disk_gb", cleanup_res)
+
 
 if __name__ == "__main__":
     unittest.main()

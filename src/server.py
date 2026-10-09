@@ -518,6 +518,11 @@ def _run_render_job(job_data, **kwargs):
             except Exception as asr_err:
                 logger.warning(f"[server] On-the-fly Whisper ASR for clip slice failed: {asr_err}")
 
+        # Proactive disk space guard: auto-purge intermediate files if headroom < 3.0 GB
+        if _get_disk_free_gb() < 3.0:
+            logger.info("[server] Disk headroom under 3.0 GB. Running proactive auto-purge of intermediate slices...")
+            api_cleanup_temp()
+
         # 1. Resolve Camera Framing / TV Director Trajectory UNCONDITIONALLY
         traj = job_data.get("trajectory") or {}
         if job_data.get("presentation_mode"):
