@@ -1539,6 +1539,25 @@ def calculate_tracking_trajectory(
                     "x": bot_c["x"], "y": bot_c["y"], "width": bot_c["w"], "height": bot_c["h"]
                 }
             })
+        elif median_faces >= 3 and len([cx for cx in shot_centers if source_w * 0.35 <= cx <= source_w * 0.65]) >= 2:
+            # 3+ person panel discussion: Track active focal speaker across shot to avoid excluding middle speaker
+            has_any_single_shot = True
+            shot_offsets = [
+                raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
+                if s_start <= ts <= s_end
+            ]
+            shot_x = int(round(statistics.median(shot_offsets))) if shot_offsets else center_x
+            shot_x = max(0, min(shot_x, source_w - target_crop_w))
+            shot_timeline.append({
+                "start": round(s_start, 2),
+                "end": round(s_end, 2),
+                "type": "single",
+                "camera": "panel_speaker",
+                "zone": {
+                    "id": "zone_panel", "label": "Panel Speaker",
+                    "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
+                },
+            })
         elif median_faces >= 2:
             # Check for left/right spatial separation to use 9:8 split-stack for two-speaker conversations
             shot_centers = []

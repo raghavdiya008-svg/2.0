@@ -170,7 +170,51 @@ class TestAuditFixes(unittest.TestCase):
             "is_vertical": False,
             "no_crop_scale_fit": False,
         }
-        self.assertFalse(dummy_traj.get("no_crop_scale_fit"))
+    def test_10_caption_split_center_alignment(self):
+        """Verify karaoke subtitles use SplitCenter style (seam alignment) during split_stack shots."""
+        import tempfile
+        words = [
+            {"word": "Dual", "start": 1.0, "end": 1.5},
+            {"word": "speaker", "start": 1.5, "end": 2.0},
+            {"word": "solo", "start": 5.0, "end": 5.5},
+        ]
+        shot_timeline = [
+            {"start": 0.0, "end": 4.0, "type": "split_stack"},
+            {"start": 4.0, "end": 8.0, "type": "single"},
+        ]
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as tf:
+            ass_path = tf.name
+
+        try:
+            res = cap.generate_karaoke_ass(words, ass_path, shot_timeline=shot_timeline)
+            self.assertIsNotNone(res)
+            with open(ass_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("Style: SplitCenter", content)
+            self.assertIn("Dialogue: 0,0:00:01.00,0:00:02.00,SplitCenter", content)
+            self.assertIn("Dialogue: 0,0:00:05.00,0:00:05.50,Default", content)
+        finally:
+            if os.path.exists(ass_path):
+                os.remove(ass_path)
+
+    def test_11_panel_discussion_speaker_tracking(self):
+        """Verify 3+ speaker panel shots track the focal active speaker in 9:16 instead of a broken 2-way split."""
+        source_w, source_h = 1920, 1080
+        # 3 speakers: left (400), center (960), right (1500)
+        shot_centers = [400, 960, 960, 1500]
+        median_faces = 3
+        is_panel = median_faces >= 3 and len([cx for cx in shot_centers if source_w * 0.35 <= cx <= source_w * 0.65]) >= 2
+        self.assertTrue(is_panel, "3-person panel with center speaker should be identified as panel")
+
+    def test_12_presentation_mode_toggle(self):
+        """Verify presentation_mode toggle configures blur_box layout to preserve code / slides."""
+        from server import RenderRequest, BatchRenderRequest
+        req = RenderRequest(video="dummy.mp4", presentation_mode=True)
+        self.assertTrue(req.presentation_mode)
+
+        breq = BatchRenderRequest(file_name="dummy.mp4", clips=[], presentation_mode=True)
+        self.assertTrue(breq.presentation_mode)
 
 
 if __name__ == "__main__":

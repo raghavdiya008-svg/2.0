@@ -314,6 +314,7 @@ class RenderRequest(BaseModel):
     margin_v: Optional[int] = None
     title_y: Optional[int] = None
     delete_title: bool = False
+    presentation_mode: bool = False
 
     @field_validator('aspect_ratio')
     @classmethod
@@ -348,6 +349,7 @@ class BatchRenderRequest(BaseModel):
     audio_md5: Optional[str] = None
     title_y: Optional[int] = 130
     margin_v: Optional[int] = None
+    presentation_mode: bool = False
 
 class CameraZoneModel(BaseModel):
     id: str
@@ -518,7 +520,9 @@ def _run_render_job(job_data, **kwargs):
 
         # 1. Resolve Camera Framing / TV Director Trajectory UNCONDITIONALLY
         traj = job_data.get("trajectory") or {}
-        if not traj.get("shot_timeline") and job_data.get("shot_timeline"):
+        if job_data.get("presentation_mode"):
+            traj = {"layout": "blur_box", "no_crop_scale_fit": True}
+        elif not traj.get("shot_timeline") and job_data.get("shot_timeline"):
             traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
 
         if not traj.get("shot_timeline") and not traj.get("layout"):
@@ -559,6 +563,7 @@ def _run_render_job(job_data, **kwargs):
                         font_name="Anton",
                         font_size=92,
                         margin_v=margin_v,
+                        shot_timeline=traj.get("shot_timeline") if traj else None,
                         uppercase=True,
                     )
                     if generated and os.path.isfile(generated):
@@ -1148,6 +1153,7 @@ def api_render_batch(req: BatchRenderRequest):
                 "title_y": clip.get("title_y", getattr(req, "title_y", 130)),
                 "margin_v": clip.get("margin_v", getattr(req, "margin_v", None)),
                 "delete_title": bool(clip.get("delete_title", False)),
+                "presentation_mode": bool(clip.get("presentation_mode", getattr(req, "presentation_mode", False))),
                 "brand_logo_path": _resolve_logo_path(req.brand_logo),
                 "watermark_logo_path": _resolve_logo_path(req.watermark_logo),
                 "words": cached_words,
@@ -1457,6 +1463,7 @@ def render(req: RenderRequest):
         "margin_v": req.margin_v,
         "title_y": req.title_y,
         "delete_title": req.delete_title,
+        "presentation_mode": req.presentation_mode,
     }
 
     render_queue_manager.submit_job(

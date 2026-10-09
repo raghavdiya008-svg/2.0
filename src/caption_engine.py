@@ -190,6 +190,10 @@ def _ass_header(
         f"-1,0,0,0,100,100,{spc},0,"
         # BorderStyle Outline Shadow Alignment MarginL MarginR MarginV Encoding
         f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1\n"
+        f"Style: SplitCenter,{safe_font},{font_size},"
+        f"{primary_color},{secondary_color},{outline_color},{back_color},"
+        f"-1,0,0,0,100,100,{spc},0,"
+        f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},940,1\n"
     )
     return (
         "[Script Info]\n"
@@ -380,6 +384,16 @@ def generate_karaoke_ass(
 
             karaoke_str = "".join(karaoke_parts).rstrip()
             line_style = "Default"
+            if shot_timeline:
+                for s in shot_timeline:
+                    s_st = float(s.get("start", 0.0))
+                    s_en = float(s.get("end", 9999.0))
+                    if s_st <= line_start <= s_en:
+                        if s.get("type") == "split_stack":
+                            line_style = "SplitCenter"
+                        break
+            elif kwargs.get("is_split_stack"):
+                line_style = "SplitCenter"
 
             f.write(
                 f"Dialogue: 0,{start_str},{end_str},{line_style},,0,0,0,,{karaoke_str}\n"
