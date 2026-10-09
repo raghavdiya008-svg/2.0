@@ -1217,8 +1217,7 @@ def calculate_tracking_trajectory(
             "zoom_keyframes": [],
             "scene_cuts": clean_cuts,
         }
-        if not is_vert:
-            res["no_crop_scale_fit"] = True
+        res["no_crop_scale_fit"] = False
         return res
 
     if not os.path.isfile(video_path):
@@ -1360,8 +1359,16 @@ def calculate_tracking_trajectory(
                     bx, by, bw, bh = fd.box
                     sb = (int(bx * inv), int(by * inv), int(bw * inv), int(bh * inv))
                     sc = (fd.landmark_center[0] * inv, fd.landmark_center[1] * inv) if fd.landmark_center else None
-                    scaled_detections.append(FaceDetection(box=sb, landmarks=None, landmark_center=sc, score=fd.score))
+                    cy = sb[1] + sb[3] / 2.0
+                    # Suppress false positives on floor, table edge, or microscopic noise
+                    if cy < source_h * 0.75 and sb[2] >= 60 and sb[3] >= 60:
+                        scaled_detections.append(FaceDetection(box=sb, landmarks=None, landmark_center=sc, score=fd.score))
                 face_detections = scaled_detections
+            else:
+                face_detections = [
+                    fd for fd in face_detections
+                    if (fd.box[1] + fd.box[3] / 2.0) < source_h * 0.75 and fd.box[2] >= 60 and fd.box[3] >= 60
+                ]
 
             all_frame_detections.append((timestamp, [fd.box for fd in face_detections]))
                 
@@ -1424,7 +1431,7 @@ def calculate_tracking_trajectory(
             "source_h": source_h,
             "is_vertical": False,
             "is_dual_speaker": False,
-            "no_crop_scale_fit": True,
+            "no_crop_scale_fit": False,
             "x_offsets": [center_x],
             "sample_timestamps": [0.0],
             "keyframes": [{"time": 0.0, "x_offset": center_x}],
@@ -1534,9 +1541,20 @@ def calculate_tracking_trajectory(
             })
         elif median_faces >= 2:
             # Check for left/right spatial separation to use 9:8 split-stack for two-speaker conversations
-            left_xs = [d["center"][0] for d in shot_frame_dets if d.get("center") and d["center"][0] < source_w * 0.48]
-            right_xs = [d["center"][0] for d in shot_frame_dets if d.get("center") and d["center"][0] > source_w * 0.52]
-            if left_xs and right_xs and (statistics.median(right_xs) - statistics.median(left_xs)) >= (source_w * 0.20):
+            shot_centers = []
+            for item in shot_frame_dets:
+                if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[1], list):
+                    for b in item[1]:
+                        if isinstance(b, (tuple, list)) and len(b) >= 4:
+                            shot_centers.append(b[0] + b[2] / 2.0)
+                        elif isinstance(b, dict) and "center" in b:
+                            shot_centers.append(b["center"][0])
+                elif isinstance(item, dict) and "center" in item:
+                    shot_centers.append(item["center"][0])
+
+            left_xs = [cx for cx in shot_centers if cx < source_w * 0.48]
+            right_xs = [cx for cx in shot_centers if cx > source_w * 0.52]
+            if left_xs and right_xs and (statistics.median(right_xs) - statistics.median(left_xs)) >= (source_w * 0.15):
                 med_l = statistics.median(left_xs)
                 med_r = statistics.median(right_xs)
                 target_w_98 = max(2, int(round(source_h * 9.0 / 8.0) // 2) * 2)
@@ -1559,12 +1577,22 @@ def calculate_tracking_trajectory(
                     }
                 })
             else:
-                has_any_blur_box_shot = True
+                has_any_single_shot = True
+                shot_offsets = [
+                    raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
+                    if s_start <= ts <= s_end
+                ]
+                shot_x = int(round(statistics.median(shot_offsets))) if shot_offsets else center_x
+                shot_x = max(0, min(shot_x, source_w - target_crop_w))
                 shot_timeline.append({
                     "start": round(s_start, 2),
                     "end": round(s_end, 2),
-                    "type": "blur_box",
-                    "camera": "wide",
+                    "type": "single",
+                    "camera": "solo",
+                    "zone": {
+                        "id": "zone_solo", "label": "Solo",
+                        "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
+                    },
                 })
         else:
             # Solo shot: Find dominant face center in this shot (SmoothGlide centered)
