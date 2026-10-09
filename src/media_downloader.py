@@ -59,7 +59,7 @@ def _ytdlp_extra_args() -> list:
     Injects cookies.txt automatically when present.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=android,web",
+        "--extractor-args", "youtube:player_client=visionos,android",
         "--no-check-certificates",
     ]
     cookies_path = _find_cookies_file()
@@ -210,7 +210,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "extractor_args": {"youtube": {"player_client": ["visionos", "android"]}},
             "nocheckcertificate": True,
         }
         if cookies_path:
@@ -263,7 +263,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
                 "noplaylist": True,
                 "quiet": False,
                 "no_warnings": False,
-                "extractor_args": {"youtube": {"player_client": ["android"]}},
+                "extractor_args": {"youtube": {"player_client": ["visionos", "android"]}},
                 "nocheckcertificate": True,
             }
             cookies_path = _find_cookies_file()
@@ -291,16 +291,16 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
             if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0:
                 _downloaded_ok = True
-                print(f"[media_downloader] Android bypass download complete: {safe_filename}")
+                print(f"[media_downloader] VisionOS/Android bypass download complete: {safe_filename}")
         except Exception as android_err:
             last_error_msg = str(android_err)
-            logger.warning(f"[media_downloader] Android client bypass error: {android_err}")
+            logger.warning(f"[media_downloader] VisionOS/Android client bypass error: {android_err}")
 
-    # ── Step 4: FALLBACK — subprocess (yt-dlp binary with android client) ────
+    # ── Step 4: FALLBACK — subprocess (yt-dlp binary with visionos/android client) ──
     if not _downloaded_ok:
-        print("[media_downloader] Trying subprocess fallback with Android client...")
+        print("[media_downloader] Trying subprocess fallback with VisionOS/Android client...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-            "--extractor-args", "youtube:player_client=android",
+            "--extractor-args", "youtube:player_client=visionos,android",
             "-f", format_spec,
             "--merge-output-format", "mp4",
             "-o", safe_filename,
@@ -310,9 +310,9 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         result = subprocess.run(cmd, capture_output=False)
 
         if result.returncode != 0 or not os.path.isfile(safe_filename):
-            print("[media_downloader] Android primary failed — retrying with best single stream...")
+            print("[media_downloader] VisionOS/Android primary failed — retrying with best single stream...")
             fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-                "--extractor-args", "youtube:player_client=android",
+                "--extractor-args", "youtube:player_client=visionos,android",
                 "-f", "best[ext=mp4]/best",
                 "--merge-output-format", "mp4",
                 "-o", safe_filename,
