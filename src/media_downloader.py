@@ -227,13 +227,59 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         logger.warning("[media_downloader] yt_dlp not importable — falling back to subprocess.")
     except Exception as e:
         last_error_msg = str(e)
-        logger.warning(f"[media_downloader] yt-dlp Python API error ({e}) — falling back to subprocess.")
+        logger.warning(f"[media_downloader] yt-dlp Python API error ({e}) — attempting Android client bypass.")
 
-    # ── Step 4: FALLBACK — subprocess (yt-dlp binary or python -m yt_dlp) ────
+    # ── Step 3.5: Cloud VM / Bot-Check Bypass (Android player client) ─────────
     if not _downloaded_ok:
-        print("[media_downloader] Trying subprocess fallback...")
+        try:
+            import yt_dlp  # noqa: PLC0415
+            print("[media_downloader] Retrying with Android client bypass (bypasses cloud VM bot checks)...")
+            ydl_opts_android = {
+                "format": "bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
+                "merge_output_format": "mp4",
+                "outtmpl": safe_filename,
+                "noplaylist": True,
+                "quiet": False,
+                "no_warnings": False,
+                "extractor_args": {"youtube": {"player_client": ["android"]}},
+                "nocheckcertificate": True,
+            }
+            cookies_path = _find_cookies_file()
+            if cookies_path:
+                ydl_opts_android["cookiefile"] = cookies_path
+            with yt_dlp.YoutubeDL(ydl_opts_android) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info:
+                    title = info.get("title", title) or title
+                    duration = float(info.get("duration", duration) or duration)
+                    resolved = ydl.prepare_filename(info)
+                    for ext in (".webm", ".mkv", ".m4a"):
+                        resolved = resolved.replace(ext, ".mp4")
+                    if os.path.isfile(resolved) and resolved != safe_filename:
+                        safe_filename = resolved
+
+            if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
+                for f in os.listdir(output_dir):
+                    candidate = os.path.join(output_dir, f)
+                    if (f.lower().endswith(".mp4")
+                            and os.path.getsize(candidate) > 1024 * 1024
+                            and sanitize_filename(os.path.splitext(f)[0])[:20] == safe_base[:20]):
+                        safe_filename = candidate
+                        break
+
+            if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0:
+                _downloaded_ok = True
+                print(f"[media_downloader] Android bypass download complete: {safe_filename}")
+        except Exception as android_err:
+            last_error_msg = str(android_err)
+            logger.warning(f"[media_downloader] Android client bypass error: {android_err}")
+
+    # ── Step 4: FALLBACK — subprocess (yt-dlp binary with android client) ────
+    if not _downloaded_ok:
+        print("[media_downloader] Trying subprocess fallback with Android client...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-            "-f", "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1440]/best",
+            "--extractor-args", "youtube:player_client=android",
+            "-f", "bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
             "--merge-output-format", "mp4",
             "-o", safe_filename,
             "--no-playlist",
@@ -242,9 +288,10 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         result = subprocess.run(cmd, capture_output=False)
 
         if result.returncode != 0 or not os.path.isfile(safe_filename):
-            print("[media_downloader] Primary format failed — retrying with relaxed format...")
+            print("[media_downloader] Android primary failed — retrying with best single stream...")
             fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-                "-f", "bestvideo+bestaudio/best[ext=mp4]/best",
+                "--extractor-args", "youtube:player_client=android",
+                "-f", "best[ext=mp4]/best",
                 "--merge-output-format", "mp4",
                 "-o", safe_filename,
                 "--no-playlist",
