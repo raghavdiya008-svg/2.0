@@ -34,22 +34,34 @@ def _ytdlp_cmd() -> list:
     return [sys.executable, "-m", "yt_dlp"]
 
 
+def _find_cookies_file() -> Optional[str]:
+    """Finds cookies.txt across common root/working directory locations."""
+    candidates = [
+        os.path.join(_PROJECT_ROOT, "cookies.txt"),
+        os.path.join(INPUTS_DIR, "cookies.txt"),
+        os.path.join(os.getcwd(), "cookies.txt"),
+        "/kaggle/working/cookies.txt",
+        "/kaggle/working/2.0/cookies.txt",
+    ]
+    env_c = os.environ.get("YOUTUBE_COOKIES_PATH")
+    if env_c and os.path.isfile(env_c):
+        return env_c
+    for path in candidates:
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+    return None
+
+
 def _ytdlp_extra_args() -> list:
     """
-    Returns extra resilience flags for yt-dlp to bypass bot-detection on cloud VMs
-    (Kaggle, Colab, Docker).
-
-    - player_client=android  -> Android client skips YouTube's JS n-challenge entirely.
-      No Node.js or Deno runtime required. Works reliably on restricted cloud VMs.
-    - --cookies cookies.txt  -> injected only when cookies.txt exists in the project root.
-    - --no-check-certificates -> avoids TLS errors in restricted cloud networks.
+    Returns extra resilience flags for yt-dlp.
+    Injects cookies.txt automatically when present to bypass bot detection on cloud VMs.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=ios,mweb,android,tv,web",
         "--no-check-certificates",
     ]
-    cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
-    if os.path.isfile(cookies_path):
+    cookies_path = _find_cookies_file()
+    if cookies_path:
         extra += ["--cookies", cookies_path]
         logger.info(f"[media_downloader] Using cookies file: {cookies_path}")
     return extra
@@ -165,21 +177,21 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     # ── Step 3: PRIMARY — yt-dlp Python API (no binary required) ─────────────
     # Works wherever `pip install yt-dlp` was run, no binary on PATH needed.
     _downloaded_ok = False
+    last_error_msg = ""
     try:
         import yt_dlp  # noqa: PLC0415
 
-        cookies_path = os.path.join(_PROJECT_ROOT, "cookies.txt")
+        cookies_path = _find_cookies_file()
         ydl_opts = {
-            "format": "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best",
+            "format": "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1440]/best",
             "merge_output_format": "mp4",
             "outtmpl": safe_filename,
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
-            "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "android", "tv", "web"]}},
             "nocheckcertificate": True,
         }
-        if os.path.isfile(cookies_path):
+        if cookies_path:
             ydl_opts["cookiefile"] = cookies_path
             logger.info(f"[media_downloader] Using cookies file: {cookies_path}")
 
@@ -214,13 +226,14 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
     except ImportError:
         logger.warning("[media_downloader] yt_dlp not importable — falling back to subprocess.")
     except Exception as e:
+        last_error_msg = str(e)
         logger.warning(f"[media_downloader] yt-dlp Python API error ({e}) — falling back to subprocess.")
 
     # ── Step 4: FALLBACK — subprocess (yt-dlp binary or python -m yt_dlp) ────
     if not _downloaded_ok:
         print("[media_downloader] Trying subprocess fallback...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-            "-f", "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best",
+            "-f", "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1440]/best",
             "--merge-output-format", "mp4",
             "-o", safe_filename,
             "--no-playlist",
@@ -231,7 +244,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         if result.returncode != 0 or not os.path.isfile(safe_filename):
             print("[media_downloader] Primary format failed — retrying with relaxed format...")
             fallback_cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
-                "-f", "bestvideo+bestaudio/best",
+                "-f", "bestvideo+bestaudio/best[ext=mp4]/best",
                 "--merge-output-format", "mp4",
                 "-o", safe_filename,
                 "--no-playlist",
@@ -240,10 +253,12 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
             subprocess.run(fallback_cmd, capture_output=False)
 
     if not os.path.isfile(safe_filename):
+        err_hint = f" (Details: {last_error_msg})" if last_error_msg else ""
         raise RuntimeError(
-            f"yt-dlp failed to download '{url}'. "
+            f"yt-dlp failed to download '{url}'{err_hint}. "
             "If you see a bot/cookie error on Kaggle, export your YouTube cookies "
-            "as 'cookies.txt' and place them in the project root."
+            "as 'cookies.txt' and place them in the project root or inputs/ directory, "
+            "or use a Google Drive URL / upload a local video."
         )
 
     final_duration = duration or _probe_duration(safe_filename)
