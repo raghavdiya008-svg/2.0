@@ -1466,7 +1466,11 @@ async def upload_file(file: UploadFile = File(...)):
     filename = secure_filename(file.filename)
     ext = os.path.splitext(filename)[1].lower()
     
-    if ext in ['.mp4', '.mov']:
+    if filename.lower() == 'cookies.txt' or ext == '.txt':
+        save_dir = _ROOT_DIR
+        file_type = 'cookies'
+        filename = 'cookies.txt'
+    elif ext in ['.mp4', '.mov', '.mkv', '.webm', '.avi']:
         save_dir = INPUTS_DIR
         file_type = 'video'
     elif ext in ['.png', '.jpg', '.jpeg']:
@@ -1478,11 +1482,18 @@ async def upload_file(file: UploadFile = File(...)):
     dest_path = os.path.join(save_dir, filename)
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+
+    if file_type == 'cookies':
+        try:
+            shutil.copyfile(dest_path, os.path.join(INPUTS_DIR, "cookies.txt"))
+        except Exception:
+            pass
         
     return {
         "success": True,
         "filename": filename,
-        "type": file_type
+        "type": file_type,
+        "message": "YouTube cookies.txt uploaded and active." if file_type == 'cookies' else "File uploaded successfully."
     }
 
 @app.get("/download/{filename}")
