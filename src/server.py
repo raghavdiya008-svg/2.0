@@ -456,26 +456,36 @@ def _run_render_job(job_data, **kwargs):
 
         # Extract transcript words for this specific sliced segment
         clip_words = []
-        if job_data.get("words"):
-            for w in job_data["words"]:
+        source_words = job_data.get("words")
+        if not source_words:
+            # Fallback to in-memory batches or sqlite db
+            for b in _batches.values():
+                b_name = b.get("file_name") or b.get("video_file") or ""
+                if b_name and (b_name == video_filename or b_name == base or base in b_name):
+                    source_words = b.get("words")
+                    if source_words:
+                        break
+
+        if source_words:
+            for w in source_words:
                 ws = float(w.get("start", 0))
                 we = float(w.get("end", 0))
                 if we > start_f and ws < end_f:
                     clip_words.append({
                         **w,
                         "start": max(0.0, ws - start_f),
-                        "end": max(0.1, we - start_f)
+                        "end": max(0.05, we - start_f)
                     })
 
-        # CRITICAL FAILSAFE: If words are not available, run on-the-fly WhisperX ASR on the sliced segment!
+        # CRITICAL FAILSAFE: If words are not available, run lightweight on-the-fly Whisper ASR on the sliced segment
         if not clip_words and not job_data.get("ass_path"):
             try:
                 import audio_intelligence
                 slice_wav = os.path.join(TEMP_DIR, f"slice_asr_{uuid.uuid4().hex[:8]}.wav")
                 audio_intelligence.extract_audio(active_input_path, slice_wav)
                 if os.path.isfile(slice_wav):
-                    logger.info(f"[server] Running on-the-fly WhisperX ASR on slice ({dur_f:.1f}s)...")
-                    raw_words = audio_intelligence.run_whisperx_alignment(slice_wav, language="en")
+                    logger.info(f"[server] Running fast on-the-fly Whisper ASR on slice ({dur_f:.1f}s)...")
+                    raw_words = audio_intelligence.run_whisperx_alignment(slice_wav, model_name="base", language="en")
                     if os.path.isfile(slice_wav):
                         try:
                             os.remove(slice_wav)
@@ -485,7 +495,7 @@ def _run_render_job(job_data, **kwargs):
                         clip_words = raw_words
                         logger.info(f"[server] On-the-fly ASR extracted {len(clip_words)} words for clip {start_f}-{end_f}")
             except Exception as asr_err:
-                logger.warning(f"[server] On-the-fly WhisperX ASR for clip slice failed: {asr_err}")
+                logger.warning(f"[server] On-the-fly Whisper ASR for clip slice failed: {asr_err}")
 
         # 1. Resolve Camera Framing / TV Director Trajectory UNCONDITIONALLY
         traj = job_data.get("trajectory") or {}

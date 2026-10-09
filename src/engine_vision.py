@@ -1315,12 +1315,16 @@ def calculate_tracking_trajectory(
     )
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
         should_sample = (frame_idx % frame_step == 0) or (frame_idx in cut_frame_indices)
         if should_sample:
+            ret, frame = cap.read()
+            if not ret:
+                break
+        else:
+            if not cap.grab():
+                break
+            frame_idx += 1
+            continue
             timestamp = frame_idx / fps
             orig_t = timestamp + slice_start_time
 

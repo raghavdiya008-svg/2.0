@@ -593,9 +593,9 @@ def run_pipeline(
                 for w in words:
                     w_start = w.get("start", 0)
                     w_end = w.get("end", 0)
-                    if w_start >= start and w_end <= end:
-                        rel_start = w_start - start
-                        rel_end = w_end - start
+                    if float(w_end) > start and float(w_start) < end:
+                        rel_start = max(0.0, float(w_start) - start)
+                        rel_end = max(0.05, float(w_end) - start)
                         # Project timestamps using pruned intervals
                         proj_start = project_timestamp(rel_start, pruned_intervals_map.get(idx, []))
                         proj_end = project_timestamp(rel_end, pruned_intervals_map.get(idx, []))

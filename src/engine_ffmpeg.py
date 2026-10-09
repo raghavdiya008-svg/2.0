@@ -896,14 +896,15 @@ def build_ffmpeg_command(
     else:
         cmd.extend([
             "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", str(getattr(opts, "crf", 20)),
+            "-preset", "veryfast",
+            "-crf", str(getattr(opts, "crf", 18)),
             "-b:v", str(bitrate_val),
             "-maxrate", str(maxrate_val),
             "-bufsize", str(bufsize_val),
         ])
 
     cmd.extend([
+        "-sws_flags", "lanczos",
         "-pix_fmt", "yuv420p",
         "-threads", str(opts.threads),
         "-c:a", "aac",

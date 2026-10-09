@@ -13,7 +13,7 @@ import json
 import logging
 import shutil
 import subprocess
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger("media_downloader")
 
@@ -107,6 +107,23 @@ def _probe_duration(file_path: str) -> float:
     except Exception:
         pass
     return 0.0
+
+
+def _probe_resolution(file_path: str) -> Tuple[int, int]:
+    """Returns (width, height) of video using ffprobe."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=s=x:p=0", file_path],
+            capture_output=True, text=True
+        )
+        if probe.returncode == 0 and probe.stdout.strip():
+            w, h = map(int, probe.stdout.strip().split("x"))
+            return w, h
+    except Exception:
+        pass
+    return 0, 0
 
 
 def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, Any]:
@@ -312,14 +329,22 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         )
 
     final_duration = duration or _probe_duration(safe_filename)
+    res_w, res_h = _probe_resolution(safe_filename)
     size_mb = os.path.getsize(safe_filename) / (1024 * 1024)
-    print(f"[media_downloader] Download complete: {safe_filename} ({size_mb:.1f} MB, {final_duration:.1f}s)")
+    print(f"[media_downloader] Download complete: {safe_filename} ({size_mb:.1f} MB, {final_duration:.1f}s, {res_w}x{res_h})")
+    if res_h > 0 and res_h < 720:
+        logger.warning(
+            f"[media_downloader] Notice: Downloaded video resolution is {res_w}x{res_h} (<720p). "
+            "For highest clarity 9:16 reels, import a 1080p source file or Google Drive link."
+        )
 
     return {
         "file_path": safe_filename,
         "file_name": os.path.basename(safe_filename),
         "title": title,
         "duration": final_duration,
+        "width": res_w,
+        "height": res_h,
         "source": "youtube",
         "url": url,
     }
