@@ -477,7 +477,27 @@ def run_whisper_fallback_local(wav_path: str) -> List[Dict[str, Any]]:
             logger.warning("[audio_intelligence] faster-whisper returned empty alignment.")
         return words
     except ImportError:
-        logger.warning("[audio_intelligence] faster-whisper not installed; skipping local fallback captions.")
+        try:
+            import whisper
+            model = whisper.load_model("base", device="cpu")
+            result = model.transcribe(wav_path, word_timestamps=True)
+            words = []
+            for segment in result.get("segments", []):
+                for w in segment.get("words", []):
+                    w_start = w.get("start")
+                    w_end = w.get("end")
+                    if w_start is not None and w_end is not None:
+                        words.append({
+                            "word": str(w.get("word", "")).strip(),
+                            "start": round(float(w_start), 2),
+                            "end": round(float(w_end), 2),
+                            "score": round(float(w.get("probability", 1.0) or 1.0), 2)
+                        })
+            if words:
+                return words
+        except Exception:
+            pass
+        logger.warning("[audio_intelligence] neither faster-whisper nor whisper installed; skipping local fallback captions.")
         return []
     except Exception as e:
         logger.warning(f"[audio_intelligence] faster-whisper local fallback failed: {e}")

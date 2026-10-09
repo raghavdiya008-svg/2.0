@@ -238,6 +238,11 @@ class TestAuditFixes(unittest.TestCase):
         self.assertGreaterEqual(ef.TARGET_WIDTH, 720)
         self.assertGreaterEqual(ef.TARGET_HEIGHT, 1280)
 
+    def test_15_whisper_fallback_contract(self):
+        """Verify run_whisper_fallback_local returns a list and does not crash on missing files."""
+        res = ai.run_whisper_fallback_local("nonexistent.wav")
+        self.assertIsInstance(res, list)
+
 
 if __name__ == "__main__":
     unittest.main()

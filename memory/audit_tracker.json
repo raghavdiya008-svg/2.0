@@ -1,10 +1,10 @@
 {
   "tracker_id": "2.0-server-audit-sync-v1",
-  "last_synced_at": "2026-10-09T16:17:57.433637Z",
-  "last_synced_timestamp": 1791562677.4336374,
+  "last_synced_at": "2026-10-09T16:43:19.882979Z",
+  "last_synced_timestamp": 1791564199.8829794,
   "system_audit": {
     "engine_version": "2.0-autonomous",
-    "timestamp": "2026-10-09T16:17:57.433637Z",
+    "timestamp": "2026-10-09T16:43:19.882979Z",
     "platform": "Windows-10-10.0.26300-SP0",
     "python_version": "3.10.11",
     "phases_compliance": {
@@ -38,17 +38,17 @@
   },
   "git_state": {
     "branch": "main",
-    "commit_sha": "45f949564e970684bd2cda776c02b113177d1df8",
+    "commit_sha": "8d34978ffe6c8dfc293ce673e4f7822ad0c7071c",
     "remote_origin": "https://raghavdiya008-svg@github.com/raghavdiya008-svg/2.0.git",
     "working_tree_clean": false,
     "uncommitted_files": [
       "M docs/AUDIT_MEMORY_TRACKER.md",
       " M license.lease",
       " M memory/audit_tracker.json",
-      " M src/caption_engine.py",
-      " M src/server.py",
-      "?? temp_render_subtitles_8b11d6d0.ass",
-      "?? temp_render_subtitles_afc7fa18.ass"
+      " M src/audio_intelligence.py",
+      " M tests/test_audit_fixes.py",
+      "?? temp_render_subtitles_28662c65.ass",
+      "?? temp_render_subtitles_33530ca9.ass"
     ]
   },
   "pipeline_db": {
@@ -64,24 +64,24 @@
       {
         "job_id": "job_1",
         "status": "completed",
-        "created_at": "2026-10-09 16:17:41",
-        "updated_at": "2026-10-09 16:17:41",
+        "created_at": "2026-10-09 16:43:12",
+        "updated_at": "2026-10-09 16:43:12",
         "error_message": null,
         "payload_summary": {}
       },
       {
         "job_id": "job_2",
         "status": "completed",
-        "created_at": "2026-10-09 16:17:41",
-        "updated_at": "2026-10-09 16:17:41",
+        "created_at": "2026-10-09 16:43:12",
+        "updated_at": "2026-10-09 16:43:12",
         "error_message": null,
         "payload_summary": {}
       },
       {
         "job_id": "job_3",
         "status": "completed",
-        "created_at": "2026-10-09 16:17:41",
-        "updated_at": "2026-10-09 16:17:42",
+        "created_at": "2026-10-09 16:43:12",
+        "updated_at": "2026-10-09 16:43:12",
         "error_message": null,
         "payload_summary": {}
       }
@@ -106,8 +106,8 @@
     "hwid": "e264be91fe2634db2261437c6bcbde8919d1c1edae504d5aaf576c1994f6b54d",
     "license_valid": true,
     "license_type": "development",
-    "issued_at": 1791562645.99,
-    "expires_at": 1791821845.99,
+    "issued_at": 1791564184.82,
+    "expires_at": 1791823384.82,
     "max_offline_hours": 72.0
   }
 }
