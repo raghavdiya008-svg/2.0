@@ -1,11 +1,11 @@
 {
   "payload": {
     "hwid": "e264be91fe2634db2261437c6bcbde8919d1c1edae504d5aaf576c1994f6b54d",
-    "issued_at": 1791550203.94,
-    "expires_at": 1791809403.94,
+    "issued_at": 1791556756.25,
+    "expires_at": 1791815956.25,
     "max_offline_hours": 72.0,
     "license_type": "development",
     "issuer": "Antigravity Licensing Authority"
   },
-  "signature": "hnFr0ttlt0HPSKN3F20pG6J1n3W5/vceh9Hbo/f/BzRrFEyHbwXAsna/Qu5JLP5+AbjVfz6TcQLcaJkyqFUJIcCkAhUIBgtnuBJ/lonTEbRe2sIe6UWpszrlsJ+jmCWuUWyQ/fiCasR/QfZpkvpn3j1RmdWhY7u6p8VOBNfC4x8ZAbXCVGzm2i2U4wBzEufaOAbbFwOpsEkoS0h17bVl4HWdQQbYzkm5QswwknFqgLbLhcIQyoT8tvKChEx5CHVEgqoiJzZXMsPO/VPm+na4b5EJ02JdgEiHWg7wqs5oyAY4cZyBwqkYPbjLBUdmVaP0NIzflx+svznHXBUV9Dc6lw=="
+  "signature": "XjUagkSfw1ZXGeb8Iapg4Ez7RdMjX+18z+hC7llOlRG7E3C4ncTMs6TtXrCAh+DqP3dl4vsDO6L0Phg9XX/iWAcx7BJXrVc/qMhecdlTB1X/M97aW+pP8KjFW0qIWBNt8rdglullLNo7a9D+z/nGD8+07oEbheSAN3ABiSW5ncZ/i6hRD4/ZiRPQwq6Tx7J2VoMzfpZqQOek6lEjCiI+09+8CadxjZM6FkufFNQQOxwLl7fa6LExlmSqPIaLCnU1Uyeeq4xidWXc8C4hJhIanK3AtzzAqhTceD4Kj1cVWZYtT9Rl+w+xl5JUuCe3kKwzjsdUccrTCNHKOxT8wQQruA=="
 }

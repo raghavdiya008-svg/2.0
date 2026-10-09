@@ -1041,6 +1041,15 @@ def render_clip(
                 os.remove(temp_text_file)
             except OSError:
                 pass
+        try:
+            import glob as _glob
+            for _ass_f in _glob.glob(os.path.join(_PROJECT_ROOT, "temp_render_subtitles_*.ass")):
+                try:
+                    os.remove(_ass_f)
+                except OSError:
+                    pass
+        except Exception:
+            pass
 
 
 def render_batch(

@@ -1320,11 +1320,6 @@ def calculate_tracking_trajectory(
             ret, frame = cap.read()
             if not ret:
                 break
-        else:
-            if not cap.grab():
-                break
-            frame_idx += 1
-            continue
             timestamp = frame_idx / fps
             orig_t = timestamp + slice_start_time
 
@@ -1410,6 +1405,9 @@ def calculate_tracking_trajectory(
 
             raw_x_offsets.append(x_offset)
             sample_timestamps.append(round(timestamp, 4))
+        else:
+            if not cap.grab():
+                break
 
         frame_idx += 1
 

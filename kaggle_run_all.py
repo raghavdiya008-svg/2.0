@@ -66,11 +66,29 @@ def setup_kaggle_environment():
             print("\nFFmpeg not detected. Attempting package install...")
             try:
                 subprocess.run(["apt-get", "update", "-y", "-qq"], check=False)
-                subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libass-dev"], check=False)
+                subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libass-dev", "fontconfig"], check=False)
             except Exception as e:
                 print(f"apt-get notice (non-fatal): {e}")
         else:
             print("\n  ✓ FFmpeg already installed in Kaggle environment.")
+
+        # Register typography fonts in Linux fontconfig cache
+        try:
+            fonts_src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+            if os.path.isdir(fonts_src_dir):
+                for tdir in [os.path.expanduser("~/.fonts"), os.path.expanduser("~/.local/share/fonts"), "/usr/local/share/fonts"]:
+                    try:
+                        os.makedirs(tdir, exist_ok=True)
+                        for f_name in os.listdir(fonts_src_dir):
+                            if f_name.lower().endswith((".ttf", ".otf")):
+                                shutil.copy2(os.path.join(fonts_src_dir, f_name), os.path.join(tdir, f_name))
+                    except Exception:
+                        pass
+                if shutil.which("fc-cache"):
+                    subprocess.run(["fc-cache", "-f"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("  ✓ Registered typography fonts (Anton, TheBoldFont) into fontconfig.")
+        except Exception as fe:
+            print(f"Font registration notice: {fe}")
 
         print("\nChecking Kaggle GPU dependencies...")
         try:

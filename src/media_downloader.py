@@ -201,8 +201,10 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         import yt_dlp  # noqa: PLC0415
 
         cookies_path = _find_cookies_file()
+        max_h = os.environ.get("MAX_DOWNLOAD_HEIGHT", "1440")
+        format_spec = f"bestvideo[height<={max_h}]+bestaudio/bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best"
         ydl_opts = {
-            "format": "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best",
+            "format": format_spec,
             "merge_output_format": "mp4",
             "outtmpl": safe_filename,
             "noplaylist": True,
@@ -255,7 +257,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
             import yt_dlp  # noqa: PLC0415
             print("[media_downloader] Retrying with Android client bypass (bypasses cloud VM bot checks)...")
             ydl_opts_android = {
-                "format": "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best",
+                "format": format_spec,
                 "merge_output_format": "mp4",
                 "outtmpl": safe_filename,
                 "noplaylist": True,
@@ -299,7 +301,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
         print("[media_downloader] Trying subprocess fallback with Android client...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
             "--extractor-args", "youtube:player_client=android",
-            "-f", "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best",
+            "-f", format_spec,
             "--merge-output-format", "mp4",
             "-o", safe_filename,
             "--no-playlist",
