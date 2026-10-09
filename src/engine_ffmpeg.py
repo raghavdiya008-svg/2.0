@@ -69,11 +69,11 @@ class RenderOptions:
     speed: float = SPEED_FACTOR
     crf: int = 20
     cq: int = 20
-    preset: str = "p4"
+    preset: str = "p6"
     tune: str = "hq"
     rc: str = "vbr"
-    bitrate: str = "8M"
-    maxrate: str = "12M"
+    bitrate: str = "15M"
+    maxrate: str = "24M"
     bufsize: str = "24M"
     threads: int = 4
     audio_bitrate: str = "192k"
@@ -847,16 +847,15 @@ def build_ffmpeg_command(
         and _has_dialogue_events(ass_path)
     )
     if has_valid_subtitles:
-        # Full absolute path properly escaped so subprocess working directory changes never break subtitle loading
-        abs_ass = os.path.abspath(ass_path).replace("\\", "/")
-        ass_path_escaped = abs_ass.replace(":", "\\:").replace("'", "'\\\\\\''")
-        fonts_dir = os.path.join(_PROJECT_ROOT, "fonts")
-        fonts_dir_esc = os.path.abspath(fonts_dir).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
-        fonts_arg = f":fontsdir='{fonts_dir_esc}'" if os.path.isdir(fonts_dir) else ""
+        import shutil
+        rel_ass_path = f"temp_render_subtitles_{uuid.uuid4().hex[:8]}.ass"
+        shutil.copy(ass_path, os.path.join(_PROJECT_ROOT, rel_ass_path))
+        fonts_dir = "fonts"
+        fonts_arg = f":fontsdir='{fonts_dir}'" if os.path.isdir(os.path.join(_PROJECT_ROOT, fonts_dir)) else ""
 
         # MarginV = 440 safe-zone lower third is standard across all layouts
         filter_complex_parts.append(
-            f"{current_label}subtitles='{ass_path_escaped}'{fonts_arg},format=yuv420p[vout]"
+            f"{current_label}subtitles='{rel_ass_path}'{fonts_arg},format=yuv420p[vout]"
         )
     else:
         # Static drawtext header banners are completely purged
@@ -888,7 +887,6 @@ def build_ffmpeg_command(
             "-c:v", "h264_nvenc",
             "-preset", str(preset_val),
             "-tune", str(tune_val),
-            "-rc", str(rc_val),
             "-cq", str(cq_val),
             "-b:v", str(bitrate_val),
             "-maxrate", str(maxrate_val),
