@@ -308,6 +308,12 @@ class RenderRequest(BaseModel):
     brand_logo_path: Optional[str] = None
     watermark_logo_path: Optional[str] = None
     speed_factor: Optional[float] = None
+    start: Optional[float] = None
+    end: Optional[float] = None
+    words: Optional[List[Dict[str, Any]]] = None
+    margin_v: Optional[int] = None
+    title_y: Optional[int] = None
+    delete_title: bool = False
 
     @field_validator('aspect_ratio')
     @classmethod
@@ -466,6 +472,19 @@ def _run_render_job(job_data, **kwargs):
                     if source_words:
                         break
 
+        if not source_words:
+            try:
+                import pipeline
+                cached = (
+                    pipeline._load_audio_cache(video_filename)
+                    or pipeline._load_audio_cache(base)
+                    or pipeline._load_audio_cache(job_data.get("audio_md5") or "")
+                )
+                if cached and "words" in cached:
+                    source_words = cached["words"]
+            except Exception:
+                pass
+
         if source_words:
             for w in source_words:
                 ws = float(w.get("start", 0))
@@ -528,19 +547,31 @@ def _run_render_job(job_data, **kwargs):
         # 2. Determine Subtitle Safe Placement and Generate ASS
         margin_v = int(job_data.get("margin_v") or 440)
 
-        if not job_data.get("ass_path") and clip_words:
-            try:
-                import caption_engine
-                caption_engine.generate_karaoke_ass(
-                    clip_words,
-                    ass_temp_file,
-                    font_name="Anton",
-                    font_size=92,
-                    margin_v=margin_v,
-                    uppercase=True,
-                )
-            except Exception as e:
-                logger.warning(f"[server] Failed to generate ASS karaoke: {e}")
+        if not job_data.get("ass_path"):
+            ass_temp_file = os.path.join(TEMP_DIR, f"subtitles_{uuid.uuid4().hex[:8]}.ass")
+            if clip_words:
+                try:
+                    import caption_engine
+                    logger.info(f"[server] Generating ASS karaoke subtitles for {len(clip_words)} words...")
+                    generated = caption_engine.generate_karaoke_ass(
+                        clip_words,
+                        ass_temp_file,
+                        font_name="Anton",
+                        font_size=92,
+                        margin_v=margin_v,
+                        uppercase=True,
+                    )
+                    if generated and os.path.isfile(generated):
+                        ass_temp_file = generated
+                        logger.info(f"[server] Successfully generated ASS karaoke subtitles at: {ass_temp_file}")
+                    else:
+                        ass_temp_file = None
+                except Exception as e:
+                    logger.warning(f"[server] Failed to generate ASS karaoke: {e}", exc_info=True)
+                    ass_temp_file = None
+            else:
+                logger.warning(f"[server] clip_words is empty — no subtitles for clip {start_f}-{end_f}")
+                ass_temp_file = None
 
         output_filename = f"{base}_clip_{int(start_f)}_{int(end_f)}_{uuid.uuid4().hex[:4]}.mp4"
     else:
@@ -1420,6 +1451,12 @@ def render(req: RenderRequest):
         "brand_logo_path": _resolve_logo_path(req.brand_logo_path),
         "watermark_logo_path": _resolve_logo_path(req.watermark_logo_path),
         "speed_factor": req.speed_factor,
+        "start": req.start,
+        "end": req.end,
+        "words": req.words,
+        "margin_v": req.margin_v,
+        "title_y": req.title_y,
+        "delete_title": req.delete_title,
     }
 
     render_queue_manager.submit_job(
