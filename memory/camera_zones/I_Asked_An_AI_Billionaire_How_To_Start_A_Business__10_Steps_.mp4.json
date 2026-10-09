@@ -1,0 +1,51 @@
+{
+  "file_name": "I Asked An AI Billionaire How To Start A Business (10 Steps).mp4",
+  "source_width": 1920,
+  "source_height": 1080,
+  "mode": "podcast",
+  "split_preference": "wide",
+  "zones": [
+    {
+      "id": "zone_host",
+      "label": "Host (Left)",
+      "x": 0,
+      "y": 0,
+      "width": 998,
+      "height": 1080,
+      "speaker_label": "SPEAKER_00",
+      "is_wide": false,
+      "is_facecam": false,
+      "is_gameplay": false,
+      "is_screencast": false,
+      "color": "#3b82f6"
+    },
+    {
+      "id": "zone_guest",
+      "label": "Guest (Right)",
+      "x": 922,
+      "y": 0,
+      "width": 998,
+      "height": 1080,
+      "speaker_label": "SPEAKER_01",
+      "is_wide": false,
+      "is_facecam": false,
+      "is_gameplay": false,
+      "is_screencast": false,
+      "color": "#10b981"
+    },
+    {
+      "id": "zone_wide",
+      "label": "Wide 2-Shot",
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080,
+      "speaker_label": null,
+      "is_wide": true,
+      "is_facecam": false,
+      "is_gameplay": false,
+      "is_screencast": false,
+      "color": "#8b5cf6"
+    }
+  ]
+}
