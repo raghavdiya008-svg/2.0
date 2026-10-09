@@ -55,9 +55,11 @@ def _find_cookies_file() -> Optional[str]:
 def _ytdlp_extra_args() -> list:
     """
     Returns extra resilience flags for yt-dlp.
-    Injects cookies.txt automatically when present to bypass bot detection on cloud VMs.
+    Injects android client by default to bypass bot-detection on cloud VMs (Kaggle/Colab).
+    Injects cookies.txt automatically when present.
     """
     extra = [
+        "--extractor-args", "youtube:player_client=android,web",
         "--no-check-certificates",
     ]
     cookies_path = _find_cookies_file()
@@ -183,12 +185,13 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
         cookies_path = _find_cookies_file()
         ydl_opts = {
-            "format": "bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1440]/best",
+            "format": "bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
             "merge_output_format": "mp4",
             "outtmpl": safe_filename,
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
             "nocheckcertificate": True,
         }
         if cookies_path:
