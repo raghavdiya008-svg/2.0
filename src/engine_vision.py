@@ -1025,7 +1025,7 @@ def detect_multispeaker_framing(
         dur = float(turn["end"]) - float(turn["start"])
         speaker_durations[spk] = speaker_durations.get(spk, 0.0) + dur
 
-    active_speakers = [spk for spk, dur in speaker_durations.items() if dur >= 0.5]
+    active_speakers = [spk for spk, dur in speaker_durations.items() if dur >= 1.5]
     if len(active_speakers) < 2:
         return None
 
@@ -1033,12 +1033,12 @@ def detect_multispeaker_framing(
     if total_talk_time <= 0:
         return None
 
-    # Fall back if one dominant speaker takes > 85% of total dialogue time
+    # Fall back if one dominant speaker takes > 80% of total dialogue time (monologue with silent nodder)
     top_speaker_pct = max(speaker_durations.values()) / total_talk_time
-    if top_speaker_pct > 0.85:
+    if top_speaker_pct > 0.80:
         return None
 
-    # Check for dialogue alternation (at least 1 speaker transition)
+    # Check for dialogue alternation (at least 1 speaker transition for conversational dialogue)
     transitions = 0
     last_spk = None
     for turn in valid_turns:
@@ -1125,21 +1125,15 @@ def detect_multispeaker_framing(
         # A frame only counts as simultaneous two-shot if:
         # 1) At least one face is on the left AND at least one on the right, AND
         # 2) The horizontal distance between the extreme centers is at least 25% of source_w!
-        # This completely prevents a single speaker swaying/gesturing across the center line
-        # or false-positive edge artifacts from being counted as two co-present speakers.
         if has_left and has_right and len(frame_box_centers) >= 2:
             if (max(frame_box_centers) - min(frame_box_centers)) >= min_face_separation:
                 frames_with_both_simultaneous += 1
 
-    # Devil's Advocate fix: Solo shots alternating (or solo closeups) must NOT trigger a static split-stack!
-    # Both left and right clusters must have consistent presence, AND they MUST appear SIMULTANEOUSLY
-    # in at least 35% of sampled frames (proving the camera is a wide multi-speaker shot).
     min_presence = max(1, int(total_frames * 0.20))
     min_simultaneous = max(1, int(total_frames * 0.35))
     if frames_with_left < min_presence or frames_with_right < min_presence:
         return None
     if frames_with_both_simultaneous < min_simultaneous:
-        # Not a wide two-shot! They appear in alternating solo shots, so solo tracking must be used instead.
         return None
 
     if not left_cluster_centers or not right_cluster_centers:
@@ -1153,24 +1147,31 @@ def detect_multispeaker_framing(
     if sep < (source_w * 0.20):
         return None
 
-    # 3. Calculate Tight Isolated 9:8 Crop Windows
-    # Tighter vertical framing (~0.68 of height or bounded by separation to prevent neighbor overlap)
-    target_h = max(int(source_h * 0.60), min(int(source_h * 0.78), int(sep * 0.95 * 8.0 / 9.0)))
+    midpoint = (median_left + median_right) / 2.0
+
+    # 3. Calculate Strict Isolated 9:8 Crop Windows (Zero Neighbor Overlap)
+    # The maximum width for each person without crossing the midpoint line
+    max_clean_w = int(min(
+        sep * 0.85,
+        (midpoint - median_left) * 1.75,
+        (median_right - midpoint) * 1.75,
+        source_w * 0.38
+    ))
+    max_clean_w = max(200, max_clean_w)
+
+    target_h = int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2
     target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
-    if target_w > int(source_w * 0.45):
-        target_w = max(2, int(round(int(source_w * 0.45) / 2.0)) * 2)
-        target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
     target_w = max(2, int(target_w // 2) * 2)
     target_h = max(2, int(target_h // 2) * 2)
 
-    # Center horizontally on Left Speaker (Speaker A)
+    # Center horizontally on Left Speaker (Speaker A), strictly bound right edge to midpoint
     x_a = int(round(median_left - target_w / 2.0))
-    x_a = max(0, min(x_a, source_w - target_w))
+    x_a = max(0, min(x_a, int(midpoint - target_w)))
     x_a = int(x_a // 2) * 2
 
-    # Center horizontally on Right Speaker (Speaker B)
+    # Center horizontally on Right Speaker (Speaker B), strictly bound left edge to midpoint
     x_b = int(round(median_right - target_w / 2.0))
-    x_b = max(0, min(x_b, source_w - target_w))
+    x_b = max(int(midpoint), min(x_b, source_w - target_w))
     x_b = int(x_b // 2) * 2
 
     # Center vertically on anatomical eye/nose center
