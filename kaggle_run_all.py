@@ -182,9 +182,37 @@ def setup_kaggle_environment():
         except Exception:
             pass
 
-        wheels_dir = os.path.join(bundle_root, "wheels") if (bundle_root and os.path.isdir(os.path.join(bundle_root, "wheels"))) else None
-        if wheels_dir:
-            print(f"  ⚡ Found offline wheels cache at {wheels_dir}. Installing offline...")
+        # Locate offline wheels cache (searches recursively)
+        wheels_dir = None
+        if bundle_root and os.path.isdir(bundle_root):
+            if os.path.isdir(os.path.join(bundle_root, "wheels")):
+                wheels_dir = os.path.join(bundle_root, "wheels")
+            else:
+                for root, dirs, _ in os.walk(bundle_root):
+                    if "wheels" in dirs:
+                        wheels_dir = os.path.join(root, "wheels")
+                        break
+        if wheels_dir is None and os.path.isdir("/kaggle/input"):
+            for root, dirs, _ in os.walk("/kaggle/input"):
+                if "wheels" in dirs:
+                    wheels_dir = os.path.join(root, "wheels")
+                    break
+
+        if wheels_dir and os.path.isdir(wheels_dir):
+            print(f"  ⚡ Found offline wheels cache at: {wheels_dir}")
+            print("  ⚡ Running instant offline pip batch install...")
+            try:
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install",
+                    f"--find-links={wheels_dir}",
+                    "--prefer-binary",
+                    "--no-warn-script-location",
+                    "-q",
+                    *dependencies
+                ], check=False)
+                print("  ✓ Offline dependency batch installation finished.")
+            except Exception as e:
+                print(f"  Offline wheel batch notice: {e}")
 
         import_map = {
             "whisperx": "whisperx",
@@ -202,30 +230,14 @@ def setup_kaggle_environment():
             imp_name = import_map.get(pkg, pkg)
             try:
                 __import__(imp_name)
-                print(f"  ✓ {pkg} already installed.")
+                print(f"  ✓ {pkg} ready.")
             except ImportError:
-                installed = False
-                if wheels_dir:
-                    try:
-                        print(f"  ⚡ Installing {pkg} from offline wheels...")
-                        res = subprocess.run([
-                            sys.executable, "-m", "pip", "install",
-                            "--no-index", f"--find-links={wheels_dir}",
-                            pkg, "--no-warn-script-location", "-q"
-                        ], check=False)
-                        if res.returncode == 0:
-                            installed = True
-                            print(f"  ✓ {pkg} installed offline.")
-                    except Exception:
-                        installed = False
-
-                if not installed:
-                    try:
-                        print(f"  ⬇ Downloading & installing {pkg} online...")
-                        subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--no-warn-script-location", "-q"], check=True)
-                        print(f"  ✓ {pkg} installed online.")
-                    except Exception as e:
-                        print(f"Failed to install {pkg}: {e}")
+                print(f"  ⬇ Downloading & installing {pkg} online fallback...")
+                try:
+                    subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--no-warn-script-location", "-q"], check=True)
+                    print(f"  ✓ {pkg} installed online.")
+                except Exception as e:
+                    print(f"Failed to install {pkg}: {e}")
     else:
         print("\nLocal system run detected. Skipping heavy Kaggle package installations.")
         print("Using local mock / CPU fallbacks in source code.")
