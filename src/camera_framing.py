@@ -296,15 +296,22 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         med_rbw = statistics.median([c[2] for c in r_coords])
         med_rbh = statistics.median([c[3] for c in r_coords])
 
+        midpoint = (med_lx + med_rx) / 2.0
+        sep = med_rx - med_lx
+        max_clean_w = int(min(sep * 0.85, (midpoint - med_lx) * 1.75, (med_rx - midpoint) * 1.75, sw * 0.38))
+        max_clean_w = max(200, max_clean_w)
+
         hz = _box_to_zone(
             "zone_host", "Host (Left)",
             (int(med_lx - med_lbw / 2), int(med_ly - med_lbh / 2), int(med_lbw), int(med_lbh)),
-            sw, sh, speaker="SPEAKER_00", color="#3b82f6", landmark_center=(med_lx, med_ly)
+            sw, sh, speaker="SPEAKER_00", color="#3b82f6", landmark_center=(med_lx, med_ly),
+            max_right=int(midpoint - 10), max_w=max_clean_w
         )
         gz = _box_to_zone(
             "zone_guest", "Guest (Right)",
             (int(med_rx - med_rbw / 2), int(med_ry - med_rbh / 2), int(med_rbw), int(med_rbh)),
-            sw, sh, speaker="SPEAKER_01", color="#10b981", landmark_center=(med_rx, med_ry)
+            sw, sh, speaker="SPEAKER_01", color="#10b981", landmark_center=(med_rx, med_ry),
+            min_left=int(midpoint + 10), max_w=max_clean_w
         )
         wz = CameraZone(
             id="zone_wide", label="Wide 2-Shot", x=0, y=0, width=sw, height=sh, is_wide=True, color="#8b5cf6"
@@ -352,6 +359,9 @@ def _box_to_zone(
     speaker: Optional[str] = None,
     color: str = "#3b82f6",
     landmark_center: Optional[Tuple[float, float]] = None,
+    min_left: Optional[int] = None,
+    max_right: Optional[int] = None,
+    max_w: Optional[int] = None,
 ) -> CameraZone:
     """Expands a face/subject bounding box or landmark center into a tight, isolated 9:8 portrait camera framing zone."""
     bx, by, bw, bh = box
@@ -361,19 +371,28 @@ def _box_to_zone(
         cx = bx + bw / 2.0
         cy = by + bh / 2.0
 
-    # Tighter 9:8 vertical framing (~0.68 of height or bounded by face height)
-    target_h = max(int(sh * 0.60), min(int(sh * 0.78), int(bh * 3.5)))
+    # Tighter 9:8 vertical framing (~0.68 of height or bounded by face height / max_w)
+    target_h = max(int(sh * 0.55), min(int(sh * 0.75), int(bh * 3.5)))
     target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
-    # Ensure target_w does not exceed 45% of source width to prevent capturing neighbor
-    if target_w > int(sw * 0.45):
-        target_w = max(2, int(round(int(sw * 0.45) / 2.0)) * 2)
+    if max_w is not None and target_w > max_w:
+        target_w = max_w
+        target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
+    elif target_w > int(sw * 0.38):
+        target_w = max(2, int(round(int(sw * 0.38) / 2.0)) * 2)
         target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
     target_w = max(2, int(target_w // 2) * 2)
     target_h = max(2, int(target_h // 2) * 2)
 
-    # Clamp to frame, anchoring on anatomical eye/nose center
-    x1 = max(0, min(sw - target_w, int(cx - target_w / 2.0)))
-    y1 = max(0, min(sh - target_h, int(cy - target_h * 0.35)))
+    # Center horizontally and enforce non-overlapping boundary bounds
+    x1 = int(cx - target_w / 2.0)
+    if max_right is not None:
+        x1 = min(x1, max_right - target_w)
+    if min_left is not None:
+        x1 = max(x1, min_left)
+    x1 = max(0, min(sw - target_w, x1))
+    
+    # Anchor vertically on anatomical eye/nose center (30% down from top of zone)
+    y1 = max(0, min(sh - target_h, int(cy - target_h * 0.30)))
     x1 = (x1 // 2) * 2
     y1 = (y1 // 2) * 2
 
