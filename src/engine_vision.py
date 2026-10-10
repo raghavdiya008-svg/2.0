@@ -319,27 +319,40 @@ def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """
     Runs YOLO on a frame.
     Returns list of (x, y, w, h) bounding boxes for detected humans (person class 0).
+    Decomposes merged composite boxes (two people sitting side-by-side grouped as one)
+    into individual left and right subject boxes.
     """
     if not _yolo_available or _yolo_model is None:
         return []
-    try:
-        results = _yolo_model(frame, device=_yolo_device, classes=[0], verbose=False)
-        boxes = []
+
+    frame_w = frame.shape[1] if frame is not None and len(frame.shape) >= 2 else 1920
+
+    def _extract_boxes(results) -> List[Tuple[int, int, int, int]]:
+        extracted = []
         for r in results:
             for box in r.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                boxes.append((x1, y1, x2 - x1, y2 - y1))
-        return boxes
+                bw = max(1, x2 - x1)
+                bh = max(1, y2 - y1)
+                # If a single detected person box is abnormally wide (w/h > 0.70 or w > frame_w * 0.35),
+                # it is a merged composite of multiple people sitting side-by-side.
+                # Decompose into distinct left and right subject boxes.
+                if bw / float(bh) > 0.70 or bw > frame_w * 0.35:
+                    half_w = bw // 2
+                    extracted.append((x1, y1, half_w, bh))
+                    extracted.append((x1 + half_w, y1, half_w, bh))
+                else:
+                    extracted.append((x1, y1, bw, bh))
+        return extracted
+
+    try:
+        results = _yolo_model(frame, device=_yolo_device, classes=[0], verbose=False)
+        return _extract_boxes(results)
     except Exception:
         if _yolo_device != "cpu":
             try:
                 results = _yolo_model(frame, device="cpu", classes=[0], verbose=False)
-                boxes = []
-                for r in results:
-                    for box in r.boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                        boxes.append((x1, y1, x2 - x1, y2 - y1))
-                return boxes
+                return _extract_boxes(results)
             except Exception:
                 pass
         return []
@@ -1245,7 +1258,8 @@ def calculate_tracking_trajectory(
     # Safe empty trajectory for fallback
     def _center_fallback(source_w: int = 1920, source_h: int = 1080) -> Dict[str, Any]:
         is_vert = (source_w / source_h) <= VERTICAL_AR_THRESHOLD if source_h > 0 else False
-        target_crop_w = min(source_w, TARGET_CROP_W)
+        target_crop_w = int(round(source_h * 9.0 / 16.0 / 2.0)) * 2 if not is_vert else source_w
+        target_crop_w = max(2, min(source_w, target_crop_w))
         best_x = max(0, (source_w - target_crop_w) // 2)
         res = {
             "fps": 30.0,
@@ -1289,7 +1303,8 @@ def calculate_tracking_trajectory(
         return _center_fallback()
 
     is_vertical = (source_w / source_h) <= VERTICAL_AR_THRESHOLD
-    target_crop_w = min(source_w, TARGET_CROP_W)
+    target_crop_w = int(round(source_h * 9.0 / 16.0 / 2.0)) * 2 if not is_vertical else source_w
+    target_crop_w = max(2, min(source_w, target_crop_w))
     center_x = max(0, (source_w - target_crop_w) // 2)
 
     is_gaming_layout, webcam_region = detect_gaming_layout(video_path)
@@ -1778,6 +1793,7 @@ def calculate_tracking_trajectory(
         "sample_timestamps": export_timestamps,
         "keyframes": keyframes_array,
         "best_x_offset": best_x,
+        "target_crop_w": target_crop_w,
         "zoom_keyframes": zoom_kfs,
         "scene_cuts": clean_cuts,
     }

@@ -710,7 +710,7 @@ def build_ffmpeg_command(
             max_x = max(0, scaled_w - target_box_w)
             if "scaled_w" not in trajectory and scaled_w > source_w and source_w > 0:
                 s_factor = scaled_w / float(source_w)
-                unscaled_target_w = min(source_w, target_box_w)
+                unscaled_target_w = int(trajectory.get("target_crop_w", min(source_w, target_box_w)))
                 traj_offsets = [
                     int(round((x + unscaled_target_w / 2.0) * s_factor - target_box_w / 2.0))
                     for x in traj_offsets
