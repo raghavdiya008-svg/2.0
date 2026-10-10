@@ -46,4 +46,4 @@ for idx, fpath in enumerate(files, 1):
             
     cap.release()
 
-print("\n✓ Frame extraction complete. Saved sample snapshots to:", INSPECT_DIR)
+print("\nDONE: Frame extraction complete. Saved sample snapshots to:", INSPECT_DIR)

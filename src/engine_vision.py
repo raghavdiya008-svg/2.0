@@ -47,7 +47,7 @@ ALPHA_SMOOTH = 0.15     # Exponential smoothing factor (lower = smoother but lag
 SAMPLE_STEP_SEC = 1.0   # Trajectory keyframe export & frame sample interval (1.0 second)
 MAX_KEYFRAMES = 500     # Maximum keyframes exported per slice (raised to 500 to prevent freeze)
 ZOOM_MIN = 1.0
-ZOOM_MAX = 1.12
+ZOOM_MAX = 1.06
 ZOOM_INTERVAL_SEC = (4, 6)   # Range of seconds between zoom pulses
 ZOOM_DURATION_SEC = 1.5      # Duration of each zoom ramp
 

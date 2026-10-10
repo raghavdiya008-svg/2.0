@@ -30,8 +30,8 @@ class TestCaptionAesthetics(unittest.TestCase):
         # 3. Heavy 4.5px outline stroke and 3px deep shadow with Alignment=2 (bottom centered)
         self.assertIn("1,4.5,3,2,", header)
 
-        # 4. Mobile safe zone: MarginV=440
-        self.assertIn(",440,1", header)
+        # 4. Mobile safe zone: MarginV=500
+        self.assertIn(",500,1", header)
 
     def test_15_word_kinetic_sample_generation(self):
         """Generates an ASS script from a 15-word transcript and verifies centiseconds & phrase length."""

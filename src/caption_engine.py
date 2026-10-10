@@ -44,7 +44,7 @@ TAG_COLOR_INACTIVE = "&HFFFFFF&"
 
 FONT_NAME    = "Arial Black"    # High-impact bold sans-serif font
 FONT_SIZE    = 84               # ~4.4% of canvas height for 1080x1920
-MARGIN_V     = 440              # 440px from bottom (Safe lower-third zone above TikTok/Reels description bar)
+MARGIN_V     = 500              # 500px from bottom (Safe lower-third zone above TikTok/Reels UI)
 MARGIN_LR    = 40               # Left/right margin
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ CAPTION_PRESETS = {
         "secondary_color": "&H00FFFFFF", # Pure crisp white
         "outline_color": "&H00000000",
         "back_color": "&H90000000",
-        "margin_v": 440,
+        "margin_v": 500,
         "uppercase": True,
     },
     "anton_viral": {
