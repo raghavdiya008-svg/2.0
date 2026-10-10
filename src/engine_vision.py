@@ -1615,49 +1615,25 @@ def calculate_tracking_trajectory(
                 },
             })
         elif median_faces >= 2:
-            # Check for left/right spatial separation to use 9:8 split-stack for two-speaker conversations
-            left_xs = [cx for cx in shot_centers if cx < source_w * 0.48]
-            right_xs = [cx for cx in shot_centers if cx > source_w * 0.52]
-            if left_xs and right_xs and (statistics.median(right_xs) - statistics.median(left_xs)) >= (source_w * 0.15):
-                med_l = statistics.median(left_xs)
-                med_r = statistics.median(right_xs)
-                target_w_98 = max(2, int(round(source_h * 9.0 / 8.0) // 2) * 2)
-                target_w_98 = min(source_w, target_w_98)
-                xa = max(0, min(int(round(med_l - target_w_98 / 2.0)), source_w - target_w_98))
-                xb = max(0, min(int(round(med_r - target_w_98 / 2.0)), source_w - target_w_98))
-                has_any_split_shot = True
-                shot_timeline.append({
-                    "start": round(s_start, 2),
-                    "end": round(s_end, 2),
-                    "type": "split_stack",
-                    "camera": "podcast_split",
-                    "top_zone": {
-                        "id": "zone_top", "label": "Speaker 1",
-                        "x": xa, "y": 0, "width": target_w_98, "height": source_h
-                    },
-                    "bot_zone": {
-                        "id": "zone_bot", "label": "Speaker 2",
-                        "x": xb, "y": 0, "width": target_w_98, "height": source_h
-                    }
-                })
-            else:
-                has_any_single_shot = True
-                shot_offsets = [
-                    raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
-                    if s_start <= ts <= s_end
-                ]
-                shot_x = int(round(statistics.median(shot_offsets))) if shot_offsets else center_x
-                shot_x = max(0, min(shot_x, source_w - target_crop_w))
-                shot_timeline.append({
-                    "start": round(s_start, 2),
-                    "end": round(s_end, 2),
-                    "type": "single",
-                    "camera": "solo",
-                    "zone": {
-                        "id": "zone_solo", "label": "Solo",
-                        "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
-                    },
-                })
+            # Multi-person scene without active two-way conversational diarization:
+            # Lock onto the active speaking subject (single 9:16 focal camera) to avoid false split-screen on silent nodders.
+            has_any_single_shot = True
+            shot_offsets = [
+                raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
+                if s_start <= ts <= s_end
+            ]
+            shot_x = int(round(statistics.median(shot_offsets))) if shot_offsets else center_x
+            shot_x = max(0, min(shot_x, source_w - target_crop_w))
+            shot_timeline.append({
+                "start": round(s_start, 2),
+                "end": round(s_end, 2),
+                "type": "single",
+                "camera": "solo",
+                "zone": {
+                    "id": "zone_solo", "label": "Active Speaker",
+                    "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
+                },
+            })
         else:
             # Solo shot: Find dominant face center in this shot (SmoothGlide centered)
             has_any_single_shot = True
