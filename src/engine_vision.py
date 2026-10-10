@@ -127,18 +127,26 @@ def _try_load_insightface() -> bool:
         providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if use_cuda else ['CPUExecutionProvider']
         ctx_id = 0 if use_cuda else -1
 
+        insight_roots = [
+            "/kaggle/input/datasets/rapexx/reel-engine-bundle/models/insightface",
+            "/kaggle/input/reel-engine-bundle/models/insightface",
+            "/kaggle/input/reel-engine-bundle/pipeline_bundle/models/insightface",
+            os.path.expanduser("~/.insightface")
+        ]
+        chosen_root = next((r for r in insight_roots if os.path.isdir(r)), os.path.expanduser("~/.insightface"))
+
         app = None
-        for model_name in ["buffalo_sc", "buffalo_l"]:
+        for model_name in ["buffalo_l", "buffalo_sc"]:
             try:
-                app = FaceAnalysis(name=model_name, allowed_modules=['detection'], providers=providers)
+                app = FaceAnalysis(name=model_name, root=chosen_root, allowed_modules=['detection'], providers=providers)
                 app.prepare(ctx_id=ctx_id, det_size=(640, 640))
                 break
             except Exception as model_err:
-                logger.debug(f"[engine_vision] Could not load InsightFace model {model_name}: {model_err}")
+                logger.debug(f"[engine_vision] Could not load InsightFace model {model_name} from {chosen_root}: {model_err}")
                 app = None
 
         if app is None:
-            app = FaceAnalysis(allowed_modules=['detection'], providers=providers)
+            app = FaceAnalysis(root=chosen_root, allowed_modules=['detection'], providers=providers)
             app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
         _insightface_app = app
@@ -190,6 +198,10 @@ def _try_load_yolo() -> bool:
 
         _yolo_device = _get_device()
         model_candidates = [
+            "/kaggle/input/datasets/rapexx/reel-engine-bundle/models/yolo/yolo11n.pt",
+            "/kaggle/input/reel-engine-bundle/models/yolo/yolo11n.pt",
+            "/kaggle/input/reel-engine-bundle/yolo11n.pt",
+            "/kaggle/input/pipeline-bundle/models/yolo/yolo11n.pt",
             os.path.join(_PROJECT_ROOT, "yolo11n.pt"),
             os.path.join(_PROJECT_ROOT, "assets", "models", "yolo11n.pt"),
             "yolo11n.pt",
@@ -1047,6 +1059,8 @@ def detect_multispeaker_framing(
 
     left_cluster_centers: List[float] = []
     right_cluster_centers: List[float] = []
+    left_cluster_y: List[float] = []
+    right_cluster_y: List[float] = []
     frames_with_left = 0
     frames_with_right = 0
 
@@ -1077,13 +1091,16 @@ def detect_multispeaker_framing(
                 continue
 
             cx = bx + bw / 2.0
+            cy = by + bh / 2.0
             frame_box_centers.append(cx)
 
             if cx < left_bound:
                 left_cluster_centers.append(cx)
+                left_cluster_y.append(cy)
                 has_left = True
             elif cx > right_bound:
                 right_cluster_centers.append(cx)
+                right_cluster_y.append(cy)
                 has_right = True
 
         if has_left:
@@ -1119,15 +1136,19 @@ def detect_multispeaker_framing(
     median_right = float(statistics.median(right_cluster_centers))
 
     # Ensure Left and Right clusters are well separated (at least 20% of frame width apart)
-    if (median_right - median_left) < (source_w * 0.20):
+    sep = median_right - median_left
+    if sep < (source_w * 0.20):
         return None
 
-    # 3. Calculate 9:8 Crop Windows
-    # 9:8 aspect ratio: target_w = int(source_h * (9/16) * (16/8)) = int(source_h * 9 / 8)
-    target_w = int(round(source_h * 9.0 / 8.0))
+    # 3. Calculate Tight Isolated 9:8 Crop Windows
+    # Tighter vertical framing (~0.68 of height or bounded by separation to prevent neighbor overlap)
+    target_h = max(int(source_h * 0.60), min(int(source_h * 0.78), int(sep * 0.95 * 8.0 / 9.0)))
+    target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
+    if target_w > int(source_w * 0.45):
+        target_w = max(2, int(round(int(source_w * 0.45) / 2.0)) * 2)
+        target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
     target_w = max(2, int(target_w // 2) * 2)
-    target_w = min(source_w, target_w)
-    target_h = max(2, int(source_h // 2) * 2)
+    target_h = max(2, int(target_h // 2) * 2)
 
     # Center horizontally on Left Speaker (Speaker A)
     x_a = int(round(median_left - target_w / 2.0))
@@ -1139,15 +1160,23 @@ def detect_multispeaker_framing(
     x_b = max(0, min(x_b, source_w - target_w))
     x_b = int(x_b // 2) * 2
 
+    # Center vertically on anatomical eye/nose center
+    median_left_y = float(statistics.median(left_cluster_y)) if left_cluster_y else (source_h * 0.35)
+    median_right_y = float(statistics.median(right_cluster_y)) if right_cluster_y else (source_h * 0.35)
+    y_a = max(0, min(source_h - target_h, int(median_left_y - target_h * 0.35)))
+    y_b = max(0, min(source_h - target_h, int(median_right_y - target_h * 0.35)))
+    y_a = int(y_a // 2) * 2
+    y_b = int(y_b // 2) * 2
+
     top_crop = {
         "x": x_a,
-        "y": 0,
+        "y": y_a,
         "w": target_w,
         "h": target_h,
     }
     bottom_crop = {
         "x": x_b,
-        "y": 0,
+        "y": y_b,
         "w": target_w,
         "h": target_h,
     }

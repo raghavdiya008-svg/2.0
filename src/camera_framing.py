@@ -214,95 +214,106 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
 
-        # Sample frame at 1.5s or frame 45
-        sample_frame_idx = min(max(0, int(fps * 1.5)), max(0, total_frames - 1))
-        cap.set(cv2.CAP_PROP_POS_FRAMES, sample_frame_idx)
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret, frame = cap.read()
+        # Multi-sample across first 10 seconds to robustly detect all speakers
+        sample_timestamps = [1.5, 3.0, 5.0, 8.0, 12.0]
+        frames_to_check = []
+        for ts in sample_timestamps:
+            f_idx = min(max(0, int(fps * ts)), max(0, total_frames - 1))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+            ret, fr = cap.read()
+            if ret and fr is not None:
+                frames_to_check.append(fr)
     finally:
         cap.release()
 
-    if not ret or frame is None:
+    if not frames_to_check:
         return _build_default_podcast_config(file_name, sw, sh)
 
     # Detect human subjects/faces via engine_vision (InsightFace SCRFD primary)
-    face_detections: List[Any] = []
+    all_face_dets: List[Any] = []
     try:
         from engine_vision import detect_faces_or_subjects
-        face_detections = detect_faces_or_subjects(frame, prefer_insightface=True)
+        for fr in frames_to_check:
+            dets = detect_faces_or_subjects(fr, prefer_insightface=True)
+            if dets:
+                all_face_dets.extend(dets)
     except Exception as e:
         logger.debug(f"[camera_framing] InsightFace/vision detection fallback: {e}")
 
     # Fallback to Haar Cascade if 0 faces found
-    if not face_detections:
+    if not all_face_dets:
         try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
             if os.path.isfile(cascade_path):
                 face_cascade = cv2.CascadeClassifier(cascade_path)
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
-                for (x, y, w, h) in faces:
-                    from engine_vision import FaceDetection
-                    face_detections.append(FaceDetection(
-                        box=(int(x), int(y), int(w), int(h)),
-                        landmark_center=(float(x + w / 2.0), float(y + h * 0.4))
-                    ))
+                for fr in frames_to_check:
+                    gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+                    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+                    for (x, y, w, h) in faces:
+                        from engine_vision import FaceDetection
+                        all_face_dets.append(FaceDetection(
+                            box=(int(x), int(y), int(w), int(h)),
+                            landmark_center=(float(x + w / 2.0), float(y + h * 0.4))
+                        ))
         except Exception as e:
             logger.debug(f"[camera_framing] Haar detection error: {e}")
 
     # Filter out tiny spurious detections (less than 8% frame height)
     min_h = int(sh * 0.08)
-    valid_faces = [f for f in face_detections if f.box[3] >= min_h]
+    valid_faces = [f for f in all_face_dets if f.box[3] >= min_h]
 
-    # Cluster detections if multiple
-    if len(valid_faces) >= 2:
-        # Sort left to right by landmark center x (or box x center)
-        def _get_cx(f: Any) -> float:
+    # Cluster detections into Left (Host) and Right (Guest)
+    left_faces = []
+    right_faces = []
+    left_bound = sw * 0.48
+    right_bound = sw * 0.52
+
+    for f in valid_faces:
+        cx = f.landmark_center[0] if getattr(f, "landmark_center", None) is not None else (f.box[0] + f.box[2] / 2.0)
+        if cx < left_bound:
+            left_faces.append(f)
+        elif cx > right_bound:
+            right_faces.append(f)
+
+    if left_faces and right_faces:
+        def _get_coords(f: Any) -> Tuple[float, float, float, float]:
+            bx, by, bw, bh = f.box
             if getattr(f, "landmark_center", None) is not None:
-                return f.landmark_center[0]
-            return f.box[0] + f.box[2] / 2.0
+                return f.landmark_center[0], f.landmark_center[1], bw, bh
+            return bx + bw / 2.0, by + bh / 2.0, bw, bh
 
-        valid_faces.sort(key=_get_cx)
-        f1 = valid_faces[0]
-        f2 = valid_faces[-1]
+        import statistics
+        l_coords = [_get_coords(f) for f in left_faces]
+        r_coords = [_get_coords(f) for f in right_faces]
 
-        # Host Zone (Left)
+        med_lx = statistics.median([c[0] for c in l_coords])
+        med_ly = statistics.median([c[1] for c in l_coords])
+        med_lbw = statistics.median([c[2] for c in l_coords])
+        med_lbh = statistics.median([c[3] for c in l_coords])
+
+        med_rx = statistics.median([c[0] for c in r_coords])
+        med_ry = statistics.median([c[1] for c in r_coords])
+        med_rbw = statistics.median([c[2] for c in r_coords])
+        med_rbh = statistics.median([c[3] for c in r_coords])
+
         hz = _box_to_zone(
-            "zone_host", "Host (Left)", f1.box, sw, sh,
-            speaker="SPEAKER_00", color="#3b82f6",
-            landmark_center=getattr(f1, "landmark_center", None)
+            "zone_host", "Host (Left)",
+            (int(med_lx - med_lbw / 2), int(med_ly - med_lbh / 2), int(med_lbw), int(med_lbh)),
+            sw, sh, speaker="SPEAKER_00", color="#3b82f6", landmark_center=(med_lx, med_ly)
         )
-        # Guest Zone (Right)
         gz = _box_to_zone(
-            "zone_guest", "Guest (Right)", f2.box, sw, sh,
-            speaker="SPEAKER_01", color="#10b981",
-            landmark_center=getattr(f2, "landmark_center", None)
+            "zone_guest", "Guest (Right)",
+            (int(med_rx - med_rbw / 2), int(med_ry - med_rbh / 2), int(med_rbw), int(med_rbh)),
+            sw, sh, speaker="SPEAKER_01", color="#10b981", landmark_center=(med_rx, med_ry)
         )
-        # Wide Zone (Spans both)
         wz = CameraZone(
-            id="zone_wide",
-            label="Wide 2-Shot",
-            x=0,
-            y=0,
-            width=sw,
-            height=sh,
-            is_wide=True,
-            color="#8b5cf6",
+            id="zone_wide", label="Wide 2-Shot", x=0, y=0, width=sw, height=sh, is_wide=True, color="#8b5cf6"
         )
-
         return CameraFramingConfig(
-            file_name=file_name,
-            source_width=sw,
-            source_height=sh,
-            mode="podcast",
-            split_preference="wide",
-            zones=[hz, gz, wz],
+            file_name=file_name, source_width=sw, source_height=sh, mode="podcast", split_preference="wide", zones=[hz, gz, wz]
         )
 
-    elif len(valid_faces) == 1:
-        # Solo speaker
+    elif valid_faces:
         f0 = valid_faces[0]
         hz = _box_to_zone(
             "zone_host", "Solo Speaker", f0.box, sw, sh,
@@ -342,7 +353,7 @@ def _box_to_zone(
     color: str = "#3b82f6",
     landmark_center: Optional[Tuple[float, float]] = None,
 ) -> CameraZone:
-    """Expands a face/subject bounding box or landmark center into a pleasant vertical or 9:8 camera framing zone."""
+    """Expands a face/subject bounding box or landmark center into a tight, isolated 9:8 portrait camera framing zone."""
     bx, by, bw, bh = box
     if landmark_center is not None:
         cx, cy = landmark_center
@@ -350,13 +361,21 @@ def _box_to_zone(
         cx = bx + bw / 2.0
         cy = by + bh / 2.0
 
-    # Desired framing width is ~0.42 of source video width or expanded bounding box
-    target_w = max(int(sw * 0.42), int(bw * 1.8))
-    target_h = max(int(sh * 0.85), int(bh * 2.2))
+    # Tighter 9:8 vertical framing (~0.68 of height or bounded by face height)
+    target_h = max(int(sh * 0.60), min(int(sh * 0.78), int(bh * 3.5)))
+    target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
+    # Ensure target_w does not exceed 45% of source width to prevent capturing neighbor
+    if target_w > int(sw * 0.45):
+        target_w = max(2, int(round(int(sw * 0.45) / 2.0)) * 2)
+        target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
+    target_w = max(2, int(target_w // 2) * 2)
+    target_h = max(2, int(target_h // 2) * 2)
 
     # Clamp to frame, anchoring on anatomical eye/nose center
     x1 = max(0, min(sw - target_w, int(cx - target_w / 2.0)))
     y1 = max(0, min(sh - target_h, int(cy - target_h * 0.35)))
+    x1 = (x1 // 2) * 2
+    y1 = (y1 // 2) * 2
 
     return CameraZone(
         id=zone_id,
@@ -371,8 +390,17 @@ def _box_to_zone(
 
 
 def _build_default_podcast_config(file_name: str, sw: int, sh: int) -> CameraFramingConfig:
-    """Builds standard podcast left/right split and wide zones."""
-    half_w = int(sw * 0.52)
+    """Builds standard podcast left/right split and wide zones with isolated 9:8 margins."""
+    target_h = int(round(sh * 0.70 / 2.0)) * 2
+    target_w = int(round(target_h * 9.0 / 8.0 / 2.0)) * 2
+    if target_w > int(sw * 0.42):
+        target_w = int(round(int(sw * 0.42) / 2.0)) * 2
+        target_h = int(round(target_w * 8.0 / 9.0 / 2.0)) * 2
+    
+    host_x = int(round(sw * 0.05 / 2.0)) * 2
+    guest_x = max(0, int(round((sw * 0.95 - target_w) / 2.0)) * 2)
+    top_y = max(0, min(sh - target_h, int(round(sh * 0.15 / 2.0)) * 2))
+
     return CameraFramingConfig(
         file_name=file_name,
         source_width=sw,
@@ -383,20 +411,20 @@ def _build_default_podcast_config(file_name: str, sw: int, sh: int) -> CameraFra
             CameraZone(
                 id="zone_host",
                 label="Host (Left)",
-                x=0,
-                y=0,
-                width=half_w,
-                height=sh,
+                x=host_x,
+                y=top_y,
+                width=target_w,
+                height=target_h,
                 speaker_label="SPEAKER_00",
                 color="#3b82f6",
             ),
             CameraZone(
                 id="zone_guest",
                 label="Guest (Right)",
-                x=max(0, sw - half_w),
-                y=0,
-                width=half_w,
-                height=sh,
+                x=guest_x,
+                y=top_y,
+                width=target_w,
+                height=target_h,
                 speaker_label="SPEAKER_01",
                 color="#10b981",
             ),

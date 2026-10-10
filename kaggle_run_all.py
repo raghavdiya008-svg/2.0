@@ -62,6 +62,91 @@ def setup_kaggle_environment():
     
     if is_kaggle:
         import shutil
+
+        # ── 1. Discover Kaggle Dataset Bundle (/kaggle/input/...) ─────────────
+        bundle_candidates = [
+            "/kaggle/input/datasets/rapexx/reel-engine-bundle",
+            "/kaggle/input/reel-engine-bundle",
+            "/kaggle/input/reel-engine-bundle/pipeline_bundle",
+            "/kaggle/input/pipeline-bundle",
+            "/kaggle/input/pipeline_bundle",
+        ]
+        bundle_root = None
+        for cand in bundle_candidates:
+            if os.path.isdir(cand):
+                bundle_root = cand
+                break
+        
+        if bundle_root is None and os.path.isdir("/kaggle/input"):
+            for root, dirs, files in os.walk("/kaggle/input"):
+                if "wheels" in dirs or "buffalo_l" in dirs or "yolo11n.pt" in files:
+                    bundle_root = root
+                    break
+
+        if bundle_root:
+            print(f"\n💎 Found Attached Kaggle Dataset Bundle: {bundle_root}")
+            # Setup environment variables for offline model stores
+            models_dir = os.path.join(bundle_root, "models")
+            if os.path.isdir(models_dir):
+                whisper_dir = os.path.join(models_dir, "whisper")
+                if not os.path.isdir(whisper_dir):
+                    whisper_dir = os.path.join(models_dir, "huggingface")
+                if os.path.isdir(whisper_dir):
+                    os.environ["HF_HOME"] = whisper_dir
+                os.environ["TORCH_HOME"] = models_dir
+                
+                # Copy/symlink YOLO models to project root if present
+                for yolo_name in ["yolo11n.pt", "yolov8n-face.pt"]:
+                    y_src = os.path.join(models_dir, "yolo", yolo_name)
+                    if not os.path.isfile(y_src):
+                        y_src = os.path.join(bundle_root, yolo_name)
+                    if os.path.isfile(y_src) and not os.path.isfile(yolo_name):
+                        try:
+                            shutil.copy2(y_src, yolo_name)
+                            print(f"  ✓ Linked {yolo_name} from dataset bundle.")
+                        except Exception:
+                            pass
+
+                # Pre-seed InsightFace model cache to avoid redownloads
+                insight_src = os.path.join(models_dir, "insightface", "models")
+                if not os.path.isdir(insight_src):
+                    insight_src = os.path.join(models_dir, "insightface")
+                if os.path.isdir(insight_src):
+                    dest_insight = os.path.expanduser("~/.insightface/models")
+                    os.makedirs(dest_insight, exist_ok=True)
+                    try:
+                        for item in os.listdir(insight_src):
+                            s_item = os.path.join(insight_src, item)
+                            d_item = os.path.join(dest_insight, item)
+                            if os.path.isdir(s_item) and not os.path.exists(d_item):
+                                shutil.copytree(s_item, d_item)
+                                print(f"  ✓ Linked InsightFace model '{item}' from dataset bundle.")
+                    except Exception as e:
+                        print(f"  Notice copying InsightFace models: {e}")
+
+            # Register bundle fonts into system fontconfig
+            bundle_fonts = os.path.join(bundle_root, "fonts")
+            if os.path.isdir(bundle_fonts):
+                for tdir in [os.path.expanduser("~/.fonts"), os.path.expanduser("~/.local/share/fonts"), "/usr/local/share/fonts", "fonts"]:
+                    try:
+                        os.makedirs(tdir, exist_ok=True)
+                        for f_name in os.listdir(bundle_fonts):
+                            if f_name.lower().endswith((".ttf", ".otf")):
+                                shutil.copy2(os.path.join(bundle_fonts, f_name), os.path.join(tdir, f_name))
+                    except Exception:
+                        pass
+
+            # Check for bundle cookies.txt
+            for c_cand in [os.path.join(bundle_root, "config", "cookies.txt"), os.path.join(bundle_root, "cookies.txt")]:
+                if os.path.isfile(c_cand) and not os.path.isfile("cookies.txt"):
+                    try:
+                        shutil.copy2(c_cand, "cookies.txt")
+                        print("  ✓ Loaded cookies.txt from dataset bundle.")
+                    except Exception:
+                        pass
+        else:
+            print("\nℹ️ No offline Kaggle dataset attached. Running with dynamic online fetching.")
+
         if not shutil.which("ffmpeg"):
             print("\nFFmpeg not detected. Attempting package install...")
             try:
@@ -96,6 +181,11 @@ def setup_kaggle_environment():
             subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp", "--no-warn-script-location", "-q"], check=False)
         except Exception:
             pass
+
+        wheels_dir = os.path.join(bundle_root, "wheels") if (bundle_root and os.path.isdir(os.path.join(bundle_root, "wheels"))) else None
+        if wheels_dir:
+            print(f"  ⚡ Found offline wheels cache at {wheels_dir}. Installing offline...")
+
         import_map = {
             "whisperx": "whisperx",
             "faster-whisper": "faster_whisper",
@@ -114,11 +204,28 @@ def setup_kaggle_environment():
                 __import__(imp_name)
                 print(f"  ✓ {pkg} already installed.")
             except ImportError:
-                try:
-                    print(f"  ⬇ Installing {pkg}...")
-                    subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--no-warn-script-location", "-q"], check=True)
-                except Exception as e:
-                    print(f"Failed to install {pkg}: {e}")
+                installed = False
+                if wheels_dir:
+                    try:
+                        print(f"  ⚡ Installing {pkg} from offline wheels...")
+                        res = subprocess.run([
+                            sys.executable, "-m", "pip", "install",
+                            "--no-index", f"--find-links={wheels_dir}",
+                            pkg, "--no-warn-script-location", "-q"
+                        ], check=False)
+                        if res.returncode == 0:
+                            installed = True
+                            print(f"  ✓ {pkg} installed offline.")
+                    except Exception:
+                        installed = False
+
+                if not installed:
+                    try:
+                        print(f"  ⬇ Downloading & installing {pkg} online...")
+                        subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--no-warn-script-location", "-q"], check=True)
+                        print(f"  ✓ {pkg} installed online.")
+                    except Exception as e:
+                        print(f"Failed to install {pkg}: {e}")
     else:
         print("\nLocal system run detected. Skipping heavy Kaggle package installations.")
         print("Using local mock / CPU fallbacks in source code.")

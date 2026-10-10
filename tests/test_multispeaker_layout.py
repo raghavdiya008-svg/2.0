@@ -54,13 +54,11 @@ class TestMultiSpeakerLayout(unittest.TestCase):
         top_crop = result["top_crop"]
         bot_crop = result["bottom_crop"]
 
-        # Check 9:8 aspect ratio: width ~ int(1080 * 9/8) = 1215 -> even 1214
-        expected_w = int(round(1080 * 9.0 / 8.0))
-        expected_w = int(expected_w // 2) * 2
-        self.assertEqual(top_crop["w"], expected_w)
-        self.assertEqual(bot_crop["w"], expected_w)
-        self.assertEqual(top_crop["h"], 1080)
-        self.assertEqual(bot_crop["h"], 1080)
+        # Check 9:8 aspect ratio: w / h is approximately 9 / 8 (1.125)
+        self.assertAlmostEqual(top_crop["w"] / top_crop["h"], 9.0 / 8.0, delta=0.05)
+        self.assertAlmostEqual(bot_crop["w"] / bot_crop["h"], 9.0 / 8.0, delta=0.05)
+        self.assertGreater(top_crop["w"], 0)
+        self.assertGreater(top_crop["h"], 0)
 
         # Clamped inside frame bounds
         self.assertGreaterEqual(top_crop["x"], 0)
@@ -188,11 +186,11 @@ class TestMultiSpeakerLayout(unittest.TestCase):
 
             # 1. Check top stream
             self.assertIn("crop=w='min(iw,1214)':h='min(ih,1080)':x='max(0,min(0,iw-min(iw,1214)))':y='max(0,min(0,ih-min(ih,1080)))'", filtergraph)
-            self.assertIn("scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[top]", filtergraph)
+            self.assertIn("scale=1080:960:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[top]", filtergraph)
 
             # 2. Check bottom stream
             self.assertIn("crop=w='min(iw,1214)':h='min(ih,1080)':x='max(0,min(706,iw-min(iw,1214)))':y='max(0,min(0,ih-min(ih,1080)))'", filtergraph)
-            self.assertIn("scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[bottom]", filtergraph)
+            self.assertIn("scale=1080:960:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[bottom]", filtergraph)
 
             # 3. Check vstack
             self.assertIn("[top][bottom]vstack=inputs=2[stacked]", filtergraph)

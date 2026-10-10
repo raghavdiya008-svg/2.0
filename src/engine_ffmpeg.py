@@ -527,11 +527,11 @@ def build_ffmpeg_command(
                 filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_top_raw][s{i}_bot_raw]")
                 filter_complex_parts.append(
                     f"[s{i}_top_raw]crop=w='min(iw,{tw})':h='min(ih,{th})':x='max(0,min({tx},iw-min(iw,{tw})))':y='max(0,min({ty},ih-min(ih,{th})))',"
-                    f"scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_top]"
+                    f"scale=1080:960:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_top]"
                 )
                 filter_complex_parts.append(
                     f"[s{i}_bot_raw]crop=w='min(iw,{bw})':h='min(ih,{bh})':x='max(0,min({bx},iw-min(iw,{bw})))':y='max(0,min({by},ih-min(ih,{bh})))',"
-                    f"scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_bot]"
+                    f"scale=1080:960:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:960:(in_w-1080)/2:(in_h-960)/2[s{i}_bot]"
                 )
                 filter_complex_parts.append(
                     f"[s{i}_top][s{i}_bot]vstack=inputs=2,drawbox=x=0:y=958:w=1080:h=4:color=black@0.6:t=fill,setsar=1,format=yuv420p[v_shot_{i}]"
@@ -546,10 +546,10 @@ def build_ffmpeg_command(
                 filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_cam_raw][s{i}_game_raw]")
                 filter_complex_parts.append(
                     f"[s{i}_cam_raw]crop=w='min(iw,{cw})':h='min(ih,{ch})':x='max(0,min({cx},iw-min(iw,{cw})))':y='max(0,min({cy},ih-min(ih,{ch})))',"
-                    f"scale=1080:672:force_original_aspect_ratio=increase,crop=1080:672:(in_w-1080)/2:(in_h-672)/2[s{i}_cam]"
+                    f"scale=1080:672:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:672:(in_w-1080)/2:(in_h-672)/2[s{i}_cam]"
                 )
                 filter_complex_parts.append(
-                    f"[s{i}_game_raw]scale=1080:1248:force_original_aspect_ratio=increase,crop=1080:1248:(in_w-1080)/2:(in_h-1248)/2[s{i}_game]"
+                    f"[s{i}_game_raw]scale=1080:1248:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:1248:(in_w-1080)/2:(in_h-1248)/2[s{i}_game]"
                 )
                 filter_complex_parts.append(
                     f"[s{i}_cam][s{i}_game]vstack=inputs=2,setsar=1,format=yuv420p[v_shot_{i}]"
@@ -558,11 +558,11 @@ def build_ffmpeg_command(
                 # Multi-Face / Banter Wide shot: Centered 16:9 (1080x608) at y=656 over Gaussian blur background
                 filter_complex_parts.append(f"[raw_s{i}]{trim_filter},split=2[s{i}_bg_raw][s{i}_fg_raw]")
                 filter_complex_parts.append(
-                    f"[s{i}_bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,scale='max(2,trunc(iw/2)*2)':'max(2,trunc(ih/2)*2)',"
+                    f"[s{i}_bg_raw]scale=1080:1920:flags=lanczos:force_original_aspect_ratio=increase,scale='max(2,trunc(iw/2)*2)':'max(2,trunc(ih/2)*2)',"
                     f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,boxblur=25:5[s{i}_bg]"
                 )
                 filter_complex_parts.append(
-                    f"[s{i}_fg_raw]scale=1080:608:force_original_aspect_ratio=increase,crop=1080:608:(in_w-1080)/2:(in_h-608)/2[s{i}_fg]"
+                    f"[s{i}_fg_raw]scale=1080:608:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:608:(in_w-1080)/2:(in_h-608)/2[s{i}_fg]"
                 )
                 filter_complex_parts.append(
                     f"[s{i}_bg][s{i}_fg]overlay=0:656:shortest=1,setsar=1,format=yuv420p[v_shot_{i}]"
@@ -576,7 +576,7 @@ def build_ffmpeg_command(
                 filter_complex_parts.append(
                     f"[raw_s{i}]{trim_filter},"
                     f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
-                    f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1,format=yuv420p[v_shot_{i}]"
+                    f"scale=1080:1920:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1,format=yuv420p[v_shot_{i}]"
                 )
 
         concat_inputs = "".join(f"[v_shot_{i}]" for i in range(len(shots)))
@@ -641,7 +641,7 @@ def build_ffmpeg_command(
             f"[top_raw]fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop=w='min(iw,{tw})':h='min(ih,{th})':x='max(0,min({tx},iw-min(iw,{tw})))':y='max(0,min({ty},ih-min(ih,{th})))',"
-            f"scale=1080:960:force_original_aspect_ratio=increase,"
+            f"scale=1080:960:flags=lanczos:force_original_aspect_ratio=increase,"
             f"crop=1080:960:(in_w-1080)/2:(in_h-960)/2[top]"
         )
 
@@ -649,7 +649,7 @@ def build_ffmpeg_command(
             f"[bot_raw]fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop=w='min(iw,{bw})':h='min(ih,{bh})':x='max(0,min({bx},iw-min(iw,{bw})))':y='max(0,min({by},ih-min(ih,{bh})))',"
-            f"scale=1080:960:force_original_aspect_ratio=increase,"
+            f"scale=1080:960:flags=lanczos:force_original_aspect_ratio=increase,"
             f"crop=1080:960:(in_w-1080)/2:(in_h-960)/2[bottom]"
         )
 
@@ -678,7 +678,7 @@ def build_ffmpeg_command(
             f"{split_src}fps=30,setpts=PTS-STARTPTS,"
             f"{eq_filter},"
             f"crop=w='min(iw,{zw})':h='min(ih,{zh})':x='max(0,min({zx},iw-min(iw,{zw})))':y='max(0,min({zy},ih-min(ih,{zh})))',"
-            f"scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"scale=1080:1920:flags=lanczos:force_original_aspect_ratio=increase,"
             f"crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,"
             f"format=yuv420p[comp0]"
         )
@@ -848,8 +848,12 @@ def build_ffmpeg_command(
     )
     if has_valid_subtitles:
         import shutil
-        rel_ass_path = f"temp_render_subtitles_{uuid.uuid4().hex[:8]}.ass"
-        shutil.copy(ass_path, os.path.join(_PROJECT_ROOT, rel_ass_path))
+        temp_dir = os.path.join(_PROJECT_ROOT, "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        filename = f"temp_render_subtitles_{uuid.uuid4().hex[:8]}.ass"
+        dest_path = os.path.join(temp_dir, filename)
+        shutil.copy(ass_path, dest_path)
+        rel_ass_path = f"temp/{filename}"
         fonts_dir = "fonts"
         fonts_arg = f":fontsdir='{fonts_dir}'" if os.path.isdir(os.path.join(_PROJECT_ROOT, fonts_dir)) else ""
 
@@ -1043,6 +1047,11 @@ def render_clip(
                 pass
         try:
             import glob as _glob
+            for _ass_f in _glob.glob(os.path.join(_PROJECT_ROOT, "temp", "temp_render_subtitles_*.ass")):
+                try:
+                    os.remove(_ass_f)
+                except OSError:
+                    pass
             for _ass_f in _glob.glob(os.path.join(_PROJECT_ROOT, "temp_render_subtitles_*.ass")):
                 try:
                     os.remove(_ass_f)

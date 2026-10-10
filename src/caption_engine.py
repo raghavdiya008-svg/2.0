@@ -44,7 +44,7 @@ TAG_COLOR_INACTIVE = "&HFFFFFF&"
 
 FONT_NAME    = "Arial Black"    # High-impact bold sans-serif font
 FONT_SIZE    = 84               # ~4.4% of canvas height for 1080x1920
-MARGIN_V     = 440              # 440px from bottom (Safe lower-third safe zone)
+MARGIN_V     = 440              # 440px from bottom (Safe lower-third zone above TikTok/Reels description bar)
 MARGIN_LR    = 40               # Left/right margin
 
 # ---------------------------------------------------------------------------

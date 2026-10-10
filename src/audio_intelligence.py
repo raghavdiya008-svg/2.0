@@ -22,6 +22,26 @@ from typing import List, Tuple, Dict, Any, Optional, Union
 
 logger = logging.getLogger("audio_intelligence")
 
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_BASE_DIR, ".."))
+
+
+def _get_whisper_model_path_or_size(default_size: str = "base") -> str:
+    """Discovers preloaded Whisper model weights in attached Kaggle datasets or local caches."""
+    candidates = [
+        "/kaggle/input/datasets/rapexx/reel-engine-bundle/models/whisper/medium",
+        "/kaggle/input/datasets/rapexx/reel-engine-bundle/models/huggingface/faster-whisper-large-v2",
+        "/kaggle/input/reel-engine-bundle/models/whisper/medium",
+        "/kaggle/input/reel-engine-bundle/models/huggingface/faster-whisper-large-v2",
+        "/kaggle/input/reel-engine-bundle/pipeline_bundle/models/huggingface/faster-whisper-large-v2",
+        "/kaggle/input/pipeline-bundle/models/whisper/medium",
+        os.path.join(_PROJECT_ROOT, "models", "whisper", "medium"),
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return default_size
+
 
 
 def extract_audio(video_path: str, output_wav_path: str) -> str:
@@ -457,7 +477,8 @@ def run_whisper_fallback_local(wav_path: str) -> List[Dict[str, Any]]:
     """
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel("base", device="cpu", compute_type="int8")
+        model_target = _get_whisper_model_path_or_size("base")
+        model = WhisperModel(model_target, device="cpu", compute_type="int8")
         
         segments, _ = model.transcribe(wav_path, word_timestamps=True)
         words = []

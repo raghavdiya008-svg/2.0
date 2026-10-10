@@ -285,7 +285,7 @@ Respond strictly with valid JSON."""
                 cleaned_cues.append(cue)
 
         # Check if cues have distinct speakers. If diarization is single or missing,
-        # hold camera on the main speaker (single shot) — NEVER split-stack a solo speaker!
+        # always lock onto a single focal camera
         distinct_speakers = {c.get("speaker") for c in cues if c.get("speaker")}
         if len(distinct_speakers) <= 1 or not distinct_speakers:
             return [{"start": 0.0, "end": clip_duration, "camera": host_id, "type": "single"}]
@@ -296,19 +296,22 @@ Respond strictly with valid JSON."""
             cue = cleaned_cues[i]
             speaker = cue.get("speaker") or "SPEAKER_00"
 
-            # Check if there is rapid banter or simultaneous overlapping speech
+            # Check if there is rapid banter, conversational collisions, or fast alternating speech
             has_rapid_banter = False
             banter_end = cue["end"]
             j = i + 1
             while j < len(cleaned_cues):
                 next_cue = cleaned_cues[j]
-                if next_cue["start"] <= cue["end"] + 1.2 and next_cue.get("speaker") != speaker:
+                turn_dur = next_cue["end"] - next_cue["start"]
+                # Coalesce rapid exchanges when turns alternate quickly (< 2.2s) or speech overlap/gap is <= 1.5s
+                if (next_cue["start"] <= banter_end + 1.5 and next_cue.get("speaker") != speaker) or (turn_dur < 2.2 and next_cue.get("speaker") != speaker):
                     has_rapid_banter = True
                     banter_end = max(banter_end, next_cue["end"])
                     j += 1
                 else:
                     break
 
+            # Coalesce into unified split-stack shot to eliminate machine-gun strobe cuts
             if has_rapid_banter and (banter_end - cue["start"] >= self.min_shot_duration):
                 shots.append({
                     "start": cue["start"],
@@ -319,7 +322,7 @@ Respond strictly with valid JSON."""
                 i = j
                 continue
 
-            # Solo speaker shot
+            # Solo speaker shot for sustained monologue
             zone = self.config.get_zone_by_speaker(speaker)
             cam_id = zone.id if zone else (host_id if "00" in speaker or "host" in speaker.lower() else guest_id)
 
