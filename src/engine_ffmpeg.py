@@ -867,8 +867,8 @@ def build_ffmpeg_command(
 
     filter_complex = ";".join(filter_complex_parts)
 
-    # Audio filter chain locked strictly to native playback without atempo retiming
-    audio_filter_str = "aresample=async=1"
+    # Audio filter chain locked strictly to native playback with broadcast loudnorm mastering (-14 LUFS)
+    audio_filter_str = "aresample=async=1,loudnorm=I=-14:TP=-1.5:LRA=11"
 
     preset_val = opts.preset if opts.preset.startswith("p") else "p6"
     cq_val = getattr(opts, "cq", 20)
