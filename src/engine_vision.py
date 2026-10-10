@@ -1732,6 +1732,7 @@ def calculate_tracking_trajectory(
             "sample_timestamps": [0.0],
             "keyframes": [{"time": 0.0, "x_offset": center_x}],
             "best_x_offset": center_x,
+            "target_crop_w": target_crop_w,
             "zoom_keyframes": [],
             "scene_cuts": clean_cuts,
         }
