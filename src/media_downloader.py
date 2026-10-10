@@ -35,9 +35,16 @@ def _ytdlp_cmd() -> list:
 
 
 def _find_cookies_file() -> Optional[str]:
-    """Finds cookies.txt across common root/working directory locations."""
+    """Finds cookies.txt across common root/working/dataset directory locations."""
     candidates = [
+        "/kaggle/input/datasets/rapexx/reel-engine-bundle/config/cookies.txt",
+        "/kaggle/input/datasets/rapexx/reel-engine-bundle/cookies.txt",
+        "/kaggle/input/reel-engine-bundle/config/cookies.txt",
+        "/kaggle/input/reel-engine-bundle/cookies.txt",
+        "/kaggle/input/pipeline-bundle/config/cookies.txt",
+        "/kaggle/input/pipeline-bundle/cookies.txt",
         os.path.join(_PROJECT_ROOT, "cookies.txt"),
+        os.path.join(_PROJECT_ROOT, "config", "cookies.txt"),
         os.path.join(INPUTS_DIR, "cookies.txt"),
         os.path.join(os.getcwd(), "cookies.txt"),
         "/kaggle/working/cookies.txt",
@@ -49,18 +56,29 @@ def _find_cookies_file() -> Optional[str]:
     for path in candidates:
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             return path
+    
+    # Generic scan in /kaggle/input
+    if os.path.isdir("/kaggle/input"):
+        for root, _, files in os.walk("/kaggle/input"):
+            if "cookies.txt" in files:
+                c_path = os.path.join(root, "cookies.txt")
+                if os.path.getsize(c_path) > 0:
+                    return c_path
     return None
 
 
 def _ytdlp_extra_args() -> list:
     """
     Returns extra resilience flags for yt-dlp.
-    Injects android client by default to bypass bot-detection on cloud VMs (Kaggle/Colab).
+    Injects multi-client fallback to bypass bot-detection on cloud VMs (Kaggle/Colab).
     Injects cookies.txt automatically when present.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=visionos,android",
+        "--extractor-args", "youtube:player_client=android,ios,web_creator,web,tv",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--no-check-certificates",
+        "--retries", "3",
+        "--fragment-retries", "3",
     ]
     cookies_path = _find_cookies_file()
     if cookies_path:

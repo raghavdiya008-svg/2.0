@@ -131,9 +131,22 @@ def _try_load_insightface() -> bool:
             "/kaggle/input/datasets/rapexx/reel-engine-bundle/models/insightface",
             "/kaggle/input/reel-engine-bundle/models/insightface",
             "/kaggle/input/reel-engine-bundle/pipeline_bundle/models/insightface",
-            os.path.expanduser("~/.insightface")
         ]
-        chosen_root = next((r for r in insight_roots if os.path.isdir(r)), os.path.expanduser("~/.insightface"))
+        chosen_root = os.path.expanduser("~/.insightface")
+        for cand_root in insight_roots:
+            if os.path.isdir(cand_root):
+                try:
+                    src_m = os.path.join(cand_root, "models") if os.path.isdir(os.path.join(cand_root, "models")) else cand_root
+                    dst_m = os.path.join(chosen_root, "models")
+                    os.makedirs(dst_m, exist_ok=True)
+                    for item in os.listdir(src_m):
+                        s_item = os.path.join(src_m, item)
+                        d_item = os.path.join(dst_m, item)
+                        if os.path.isdir(s_item) and not os.path.exists(d_item):
+                            import shutil
+                            shutil.copytree(s_item, d_item)
+                except Exception as ce:
+                    logger.debug(f"[engine_vision] Notice syncing insightface models: {ce}")
 
         app = None
         for model_name in ["buffalo_l", "buffalo_sc"]:
