@@ -243,18 +243,19 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
     # Fallback to Haar Cascade if 0 faces found
     if not all_face_dets:
         try:
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            if os.path.isfile(cascade_path):
-                face_cascade = cv2.CascadeClassifier(cascade_path)
-                for fr in frames_to_check:
-                    gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-                    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
-                    for (x, y, w, h) in faces:
-                        from engine_vision import FaceDetection
-                        all_face_dets.append(FaceDetection(
-                            box=(int(x), int(y), int(w), int(h)),
-                            landmark_center=(float(x + w / 2.0), float(y + h * 0.4))
-                        ))
+            if hasattr(cv2, "data") and hasattr(cv2, "CascadeClassifier"):
+                cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                if os.path.isfile(cascade_path):
+                    face_cascade = cv2.CascadeClassifier(cascade_path)
+                    for fr in frames_to_check:
+                        gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+                        for (x, y, w, h) in faces:
+                            from engine_vision import FaceDetection
+                            all_face_dets.append(FaceDetection(
+                                box=(int(x), int(y), int(w), int(h)),
+                                landmark_center=(float(x + w / 2.0), float(y + h * 0.4))
+                            ))
         except Exception as e:
             logger.debug(f"[camera_framing] Haar detection error: {e}")
 
@@ -317,7 +318,7 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
             id="zone_wide", label="Wide 2-Shot", x=0, y=0, width=sw, height=sh, is_wide=True, color="#8b5cf6"
         )
         return CameraFramingConfig(
-            file_name=file_name, source_width=sw, source_height=sh, mode="podcast", split_preference="wide", zones=[hz, gz, wz]
+            file_name=file_name, source_width=sw, source_height=sh, mode="podcast", split_preference="split_stack", zones=[hz, gz, wz]
         )
 
     elif valid_faces:
@@ -371,15 +372,13 @@ def _box_to_zone(
         cx = bx + bw / 2.0
         cy = by + bh / 2.0
 
-    # Tighter 9:8 vertical framing (~0.68 of height or bounded by face height / max_w)
-    target_h = max(int(sh * 0.55), min(int(sh * 0.75), int(bh * 3.5)))
-    target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
+    # Full vertical portrait framing (source_h) with 9:16 crop width
+    target_h = sh
+    target_w = max(2, int(round(sh * 9.0 / 16.0 / 2.0)) * 2)
     if max_w is not None and target_w > max_w:
-        target_w = max_w
-        target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
-    elif target_w > int(sw * 0.38):
-        target_w = max(2, int(round(int(sw * 0.38) / 2.0)) * 2)
-        target_h = max(2, int(round(target_w * 8.0 / 9.0 / 2.0)) * 2)
+        target_w = max(200, max_w)
+    elif target_w > int(sw * 0.45):
+        target_w = max(2, int(round(int(sw * 0.45) / 2.0)) * 2)
     target_w = max(2, int(target_w // 2) * 2)
     target_h = max(2, int(target_h // 2) * 2)
 
@@ -391,10 +390,8 @@ def _box_to_zone(
         x1 = max(x1, min_left)
     x1 = max(0, min(sw - target_w, x1))
     
-    # Anchor vertically on anatomical eye/nose center (30% down from top of zone)
-    y1 = max(0, min(sh - target_h, int(cy - target_h * 0.30)))
+    y1 = 0
     x1 = (x1 // 2) * 2
-    y1 = (y1 // 2) * 2
 
     return CameraZone(
         id=zone_id,
@@ -402,36 +399,36 @@ def _box_to_zone(
         x=x1,
         y=y1,
         width=min(sw - x1, target_w),
-        height=min(sh - y1, target_h),
+        height=target_h,
         speaker_label=speaker,
         color=color,
     )
 
 
 def _build_default_podcast_config(file_name: str, sw: int, sh: int) -> CameraFramingConfig:
-    """Builds standard podcast left/right split and wide zones with isolated 9:8 margins."""
-    target_h = int(round(sh * 0.70 / 2.0)) * 2
-    target_w = int(round(target_h * 9.0 / 8.0 / 2.0)) * 2
-    if target_w > int(sw * 0.42):
-        target_w = int(round(int(sw * 0.42) / 2.0)) * 2
-        target_h = int(round(target_w * 8.0 / 9.0 / 2.0)) * 2
+    """Builds standard podcast left/right split and wide zones with isolated 9:16 margins."""
+    target_h = sh
+    target_w = max(2, int(round(sh * 9.0 / 16.0 / 2.0)) * 2)
+    if target_w > int(sw * 0.45):
+        target_w = int(round(int(sw * 0.45) / 2.0)) * 2
     
-    host_x = int(round(sw * 0.05 / 2.0)) * 2
-    guest_x = max(0, int(round((sw * 0.95 - target_w) / 2.0)) * 2)
-    top_y = max(0, min(sh - target_h, int(round(sh * 0.15 / 2.0)) * 2))
+    host_x = max(0, int(round(sw * 0.25 - target_w / 2.0)))
+    guest_x = min(sw - target_w, int(round(sw * 0.75 - target_w / 2.0)))
+    host_x = (host_x // 2) * 2
+    guest_x = (guest_x // 2) * 2
 
     return CameraFramingConfig(
         file_name=file_name,
         source_width=sw,
         source_height=sh,
         mode="podcast",
-        split_preference="wide",
+        split_preference="split_stack",
         zones=[
             CameraZone(
                 id="zone_host",
                 label="Host (Left)",
                 x=host_x,
-                y=top_y,
+                y=0,
                 width=target_w,
                 height=target_h,
                 speaker_label="SPEAKER_00",
@@ -441,7 +438,7 @@ def _build_default_podcast_config(file_name: str, sw: int, sh: int) -> CameraFra
                 id="zone_guest",
                 label="Guest (Right)",
                 x=guest_x,
-                y=top_y,
+                y=0,
                 width=target_w,
                 height=target_h,
                 speaker_label="SPEAKER_01",
@@ -459,3 +456,4 @@ def _build_default_podcast_config(file_name: str, sw: int, sh: int) -> CameraFra
             ),
         ]
     )
+

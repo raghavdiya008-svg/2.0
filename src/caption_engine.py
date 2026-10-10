@@ -336,11 +336,24 @@ def generate_karaoke_ass(
     active_tag_color = TAG_COLOR_ACTIVE
     inactive_tag_color = TAG_COLOR_INACTIVE
 
+    # Extract shot cut boundaries if shot_timeline is provided to avoid bridging across cuts
+    shot_cut_boundaries: List[float] = []
+    if shot_timeline:
+        for s in shot_timeline:
+            if isinstance(s, dict):
+                st = float(s.get("start", 0.0))
+                se = float(s.get("end", 0.0))
+                if st > 0.0:
+                    shot_cut_boundaries.append(st)
+                if se > 0.0:
+                    shot_cut_boundaries.append(se)
+        shot_cut_boundaries = sorted(set(shot_cut_boundaries))
+
     # --- Write ASS file ---
     with open(output_ass_path, "w", encoding="utf-8") as f:
         f.write(header)
 
-        for line_words in lines:
+        for idx_line, line_words in enumerate(lines):
             if not line_words:
                 continue
 
@@ -350,9 +363,24 @@ def generate_karaoke_ass(
                 line_start = 0.0
             
             try:
-                line_end = float(line_words[-1].get("end") if line_words[-1].get("end") is not None else line_start + 0.5)
+                natural_end = float(line_words[-1].get("end") if line_words[-1].get("end") is not None else line_start + 0.5)
             except (TypeError, ValueError):
-                line_end = line_start + 0.5
+                natural_end = line_start + 0.5
+
+            # Hold caption across natural breath pauses (up to 0.75s) until next line begins to prevent caption dropouts
+            line_end = natural_end
+            if idx_line + 1 < len(lines) and lines[idx_line + 1]:
+                try:
+                    next_start = float(lines[idx_line + 1][0].get("start") or 0.0)
+                    if next_start > natural_end and (next_start - natural_end) <= 0.75:
+                        bridged = next_start
+                        if shot_cut_boundaries:
+                            cuts_in_between = [c for c in shot_cut_boundaries if natural_end < c <= next_start]
+                            if cuts_in_between:
+                                bridged = min(cuts_in_between)
+                        line_end = bridged
+                except (TypeError, ValueError):
+                    pass
 
             start_str = format_ass_time(line_start)
             end_str = format_ass_time(line_end)

@@ -531,8 +531,15 @@ def _run_render_job(job_data, **kwargs):
             traj = {"layout": "director_multizone", "shot_timeline": job_data["shot_timeline"]}
 
         if not traj.get("shot_timeline") and not traj.get("layout"):
-            # Only use saved multi-zone camera framing if explicitly requested in job_data
-            if job_data.get("layout") == "director_multizone":
+            try:
+                import engine_vision
+                traj = engine_vision.calculate_tracking_trajectory(active_input_path)
+            except Exception as e:
+                logger.warning(f"[server] engine_vision trajectory calculation failed: {e}")
+                traj = {}
+
+            # If user explicitly requested director_multizone, or vision detected dual speakers, consult saved TV Director config
+            if (job_data.get("layout") == "director_multizone" or traj.get("is_dual_speaker")) and not traj.get("shot_timeline"):
                 saved_cfg = camera_framing.CameraFramingConfig.load(video_filename) or camera_framing.CameraFramingConfig.load(base)
                 if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
                     try:
@@ -542,14 +549,6 @@ def _run_render_job(job_data, **kwargs):
                             traj = {"layout": "director_multizone", "shot_timeline": shots}
                     except Exception as e:
                         logger.warning(f"[server] Auto TV director fallback: {e}")
-
-            # By default: Execute Master Production Engineering Plan (InsightFace SCRFD + SmoothGlide + Smart Blur Box)
-            if not traj.get("shot_timeline") and not traj.get("layout"):
-                try:
-                    import engine_vision
-                    traj = engine_vision.calculate_tracking_trajectory(active_input_path)
-                except Exception as e:
-                    logger.warning(f"[server] engine_vision trajectory calculation failed: {e}")
         job_data["trajectory"] = traj
         try:
             import torch

@@ -46,6 +46,7 @@ VERTICAL_AR_THRESHOLD = 1.0   # Videos with aspect ratio <= 1.0 (height >= width
 ALPHA_SMOOTH = 0.15     # Exponential smoothing factor (lower = smoother but laggier)
 SAMPLE_STEP_SEC = 1.0   # Trajectory keyframe export & frame sample interval (1.0 second)
 MAX_KEYFRAMES = 500     # Maximum keyframes exported per slice (raised to 500 to prevent freeze)
+MIN_SHOT_DUR = 2.0      # Minimum shot duration in seconds to prevent rapid cut jitter
 ZOOM_MIN = 1.0
 ZOOM_MAX = 1.06
 ZOOM_INTERVAL_SEC = (4, 6)   # Range of seconds between zoom pulses
@@ -326,18 +327,27 @@ def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
         return []
 
     frame_w = frame.shape[1] if frame is not None and len(frame.shape) >= 2 else 1920
+    frame_h = frame.shape[0] if frame is not None and len(frame.shape) >= 2 else 1080
 
     def _extract_boxes(results) -> List[Tuple[int, int, int, int]]:
         extracted = []
         for r in results:
             for box in r.boxes:
+                conf = float(box.conf[0]) if hasattr(box, "conf") and len(box.conf) > 0 else 1.0
+                if conf < 0.50:
+                    continue
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 bw = max(1, x2 - x1)
                 bh = max(1, y2 - y1)
-                # If a single detected person box is abnormally wide (w/h > 0.70 or w > frame_w * 0.35),
-                # it is a merged composite of multiple people sitting side-by-side.
-                # Decompose into distinct left and right subject boxes.
-                if bw / float(bh) > 0.70 or bw > frame_w * 0.35:
+
+                # Filter out bottom floor/table noise artifacts (e.g. foot/chair leg where y1 is in bottom half)
+                if y1 > frame_h * 0.55 or bh < frame_h * 0.20 or bw < 100:
+                    continue
+
+                # A merged composite box spanning multiple people sitting side-by-side only occurs
+                # when width spans more than 52% of canvas (>= 1000px on 1080p) AND w/h is significantly wide (>= 1.05).
+                # Normal single-person upper-body shots (even with arms outstretched) must not be split.
+                if bw >= frame_w * 0.52 and (bw / float(bh)) >= 1.05:
                     half_w = bw // 2
                     extracted.append((x1, y1, half_w, bh))
                     extracted.append((x1 + half_w, y1, half_w, bh))
@@ -1142,8 +1152,8 @@ def detect_multispeaker_framing(
             if (max(frame_box_centers) - min(frame_box_centers)) >= min_face_separation:
                 frames_with_both_simultaneous += 1
 
-    min_presence = max(1, int(total_frames * 0.20))
-    min_simultaneous = max(1, int(total_frames * 0.35))
+    min_presence = max(1, int(total_frames * 0.15))
+    min_simultaneous = max(1, int(total_frames * 0.20))
     if frames_with_left < min_presence or frames_with_right < min_presence:
         return None
     if frames_with_both_simultaneous < min_simultaneous:
@@ -1505,9 +1515,10 @@ def calculate_tracking_trajectory(
     # Segment the slice by scene cuts and determine layout for EACH shot:
     # - In multi-shot clips, sample 5 evenly distributed frames across each shot interval
     #   and compute the median face count.
-    # - If median count <= 1: solo shot -> type: "single" (9:16 SmoothGlide center tracking)
-    # - If median count >= 2: multi-face / wide shot -> type: "blur_box" (centered 16:9 on blur canvas)
-    # - Enforce hysteresis: merge shots with duration < 1.5s
+    # - If median count == 0: graphic slide / presentation -> type: "blur_box" (centered 16:9 on blur canvas)
+    # - If median count >= 2: multi-person scene -> discrete speaker snapping or split_stack
+    # - If median count <= 1: solo speaker -> type: "single" (9:16 SmoothGlide center tracking)
+    # - Enforce hysteresis: merge shots with duration < MIN_SHOT_DUR (2.0s)
     # =========================================================================
     clip_total_dur = sample_timestamps[-1] if sample_timestamps else (frame_count / fps if fps > 0 else 0.0)
 
@@ -1520,8 +1531,16 @@ def calculate_tracking_trajectory(
         if (s_end - s_start) >= 0.2:  # ignore micro sub-frame noise intervals
             raw_intervals.append((s_start, s_end))
 
-    # Apply temporal hysteresis: merge any shot shorter than 1.5 seconds into adjacent shot
-    MIN_SHOT_DUR = 1.5
+    # Apply temporal hysteresis: merge any shot shorter than MIN_SHOT_DUR into adjacent shot
+    def _is_zero_face(start_t: float, end_t: float) -> bool:
+        dets = [fd for fd in all_frame_detections if start_t <= fd[0] <= end_t]
+        if not dets:
+            nearest = min(all_frame_detections, key=lambda fd: abs(fd[0] - (start_t + end_t) / 2.0), default=None)
+            if nearest is not None and abs(nearest[0] - (start_t + end_t) / 2.0) <= 1.0:
+                return len(nearest[1]) == 0
+            return False
+        return all(len(fd[1]) == 0 for fd in dets)
+
     shot_intervals: List[Tuple[float, float]] = []
     for interval in raw_intervals:
         if not shot_intervals:
@@ -1529,8 +1548,14 @@ def calculate_tracking_trajectory(
         else:
             prev_start, prev_end = shot_intervals[-1]
             curr_start, curr_end = interval
-            # If current or previous shot is less than 1.5s, merge them
-            if (curr_end - curr_start) < MIN_SHOT_DUR:
+            prev_is_zero = _is_zero_face(prev_start, prev_end)
+            curr_is_zero = _is_zero_face(curr_start, curr_end)
+
+            # Never merge a zero-face slide into a face shot if it is >= 0.8s
+            if prev_is_zero != curr_is_zero and ((curr_end - curr_start) >= 0.8 or (prev_end - prev_start) >= 0.8):
+                shot_intervals.append(interval)
+            # If current or previous shot is less than MIN_SHOT_DUR, merge them
+            elif (curr_end - curr_start) < MIN_SHOT_DUR:
                 shot_intervals[-1] = (prev_start, curr_end)
             elif (prev_end - prev_start) < MIN_SHOT_DUR:
                 shot_intervals[-1] = (prev_start, curr_end)
@@ -1610,6 +1635,70 @@ def calculate_tracking_trajectory(
                     "x": bot_c["x"], "y": bot_c["y"], "width": bot_c["w"], "height": bot_c["h"]
                 }
             })
+        elif median_faces == 0:
+            # Graphic slide / screen-share / B-roll with no faces:
+            # Render centered 16:9 over Gaussian blur canvas to prevent text truncation
+            has_any_blur_box_shot = True
+            shot_timeline.append({
+                "start": round(s_start, 2),
+                "end": round(s_end, 2),
+                "type": "blur_box",
+                "camera": "graphic_slide",
+            })
+        elif median_faces >= 2:
+            left_centers = [cx for cx in shot_centers if cx < source_w * 0.48]
+            right_centers = [cx for cx in shot_centers if cx > source_w * 0.52]
+
+            host_crop_x = int(round(statistics.median(left_centers) - target_crop_w / 2.0)) if left_centers else 0
+            guest_crop_x = int(round(statistics.median(right_centers) - target_crop_w / 2.0)) if right_centers else (source_w - target_crop_w)
+            host_crop_x = max(0, min(host_crop_x, source_w - target_crop_w))
+            guest_crop_x = max(0, min(guest_crop_x, source_w - target_crop_w))
+
+            # Multi-person scene: Partition into distinct shots if camera pans between distinct speakers
+            shot_offsets_with_ts = [
+                (ts, raw_x_offsets[k]) for k, ts in enumerate(sample_timestamps)
+                if s_start <= ts <= s_end
+            ]
+            if not shot_offsets_with_ts:
+                shot_offsets_with_ts = [(s_start, center_x)]
+
+            sub_cuts = []
+            cur_cluster = [shot_offsets_with_ts[0][1]]
+            cur_start_ts = shot_offsets_with_ts[0][0]
+
+            for ts_val, x_val in shot_offsets_with_ts[1:]:
+                med_cluster = statistics.median(cur_cluster)
+                if abs(x_val - med_cluster) >= (target_crop_w * 0.35) and (ts_val - cur_start_ts) >= MIN_SHOT_DUR:
+                    sub_cuts.append((cur_start_ts, ts_val, int(round(med_cluster))))
+                    cur_cluster = [x_val]
+                    cur_start_ts = ts_val
+                else:
+                    cur_cluster.append(x_val)
+            sub_cuts.append((cur_start_ts, s_end, int(round(statistics.median(cur_cluster)))))
+
+            for sub_s, sub_e, sub_x in sub_cuts:
+                if (sub_e - sub_s) >= 0.5:
+                    has_any_single_shot = True
+                    # Discretely snap to host or guest if both clusters exist to prevent bisecting either speaker
+                    if left_centers and right_centers:
+                        dist_to_host = abs(sub_x - host_crop_x)
+                        dist_to_guest = abs(sub_x - guest_crop_x)
+                        clamped_x = host_crop_x if dist_to_host <= dist_to_guest else guest_crop_x
+                        speaker_lbl = "Host" if dist_to_host <= dist_to_guest else "Guest"
+                    else:
+                        clamped_x = max(0, min(sub_x, source_w - target_crop_w))
+                        speaker_lbl = "Active Speaker"
+
+                    shot_timeline.append({
+                        "start": round(sub_s, 2),
+                        "end": round(sub_e, 2),
+                        "type": "single",
+                        "camera": "solo",
+                        "zone": {
+                            "id": "zone_solo", "label": speaker_lbl,
+                            "x": clamped_x, "y": 0, "width": target_crop_w, "height": source_h
+                        },
+                    })
         elif median_faces >= 3 and len([cx for cx in shot_centers if source_w * 0.35 <= cx <= source_w * 0.65]) >= 2:
             # 3+ person panel discussion: Track active focal speaker across shot to avoid excluding middle speaker
             has_any_single_shot = True
@@ -1618,7 +1707,14 @@ def calculate_tracking_trajectory(
                 if s_start <= ts <= s_end
             ]
             shot_x = int(round(statistics.median(shot_offsets))) if shot_offsets else center_x
-            shot_x = max(0, min(shot_x, source_w - target_crop_w))
+            left_centers = [cx for cx in shot_centers if cx < source_w * 0.48]
+            right_centers = [cx for cx in shot_centers if cx > source_w * 0.52]
+            if left_centers and right_centers:
+                h_x = max(0, min(int(round(statistics.median(left_centers) - target_crop_w / 2.0)), source_w - target_crop_w))
+                g_x = max(0, min(int(round(statistics.median(right_centers) - target_crop_w / 2.0)), source_w - target_crop_w))
+                shot_x = h_x if abs(shot_x - h_x) <= abs(shot_x - g_x) else g_x
+            else:
+                shot_x = max(0, min(shot_x, source_w - target_crop_w))
             shot_timeline.append({
                 "start": round(s_start, 2),
                 "end": round(s_end, 2),
@@ -1626,26 +1722,6 @@ def calculate_tracking_trajectory(
                 "camera": "panel_speaker",
                 "zone": {
                     "id": "zone_panel", "label": "Panel Speaker",
-                    "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
-                },
-            })
-        elif median_faces >= 2:
-            # Multi-person scene without active two-way conversational diarization:
-            # Lock onto the active speaking subject (single 9:16 focal camera) to avoid false split-screen on silent nodders.
-            has_any_single_shot = True
-            shot_offsets = [
-                raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
-                if s_start <= ts <= s_end
-            ]
-            shot_x = int(round(statistics.median(shot_offsets))) if shot_offsets else center_x
-            shot_x = max(0, min(shot_x, source_w - target_crop_w))
-            shot_timeline.append({
-                "start": round(s_start, 2),
-                "end": round(s_end, 2),
-                "type": "single",
-                "camera": "solo",
-                "zone": {
-                    "id": "zone_solo", "label": "Active Speaker",
                     "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
                 },
             })

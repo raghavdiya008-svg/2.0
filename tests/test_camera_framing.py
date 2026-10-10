@@ -56,5 +56,12 @@ def test_suggest_camera_zones_fallback():
     config = suggest_camera_zones("non_existent_file.mp4")
     assert config is not None
     assert len(config.zones) >= 2
-    assert config.get_host_zone() is not None
-    assert config.get_guest_zone() is not None
+    assert config.split_preference == "split_stack"
+    host = config.get_host_zone()
+    assert host is not None
+    assert host.height == 1080
+    assert host.width == 608
+    guest = config.get_guest_zone()
+    assert guest is not None
+    assert guest.height == 1080
+    assert guest.width == 608
