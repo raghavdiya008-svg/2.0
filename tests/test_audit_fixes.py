@@ -275,6 +275,26 @@ class TestAuditFixes(unittest.TestCase):
         self.assertEqual(cleanup_res.get("status"), "success")
         self.assertIn("free_disk_gb", cleanup_res)
 
+    def test_18_media_downloader_id_and_cache_resolution(self):
+        """Verify extract_youtube_id and _find_cached_video accurately match titles and IDs."""
+        import media_downloader as md
+
+        # Test ID extraction across YouTube formats
+        self.assertEqual(md.extract_youtube_id("https://www.youtube.com/watch?v=Hwn_ThgWduw"), "Hwn_ThgWduw")
+        self.assertEqual(md.extract_youtube_id("https://youtu.be/Hwn_ThgWduw"), "Hwn_ThgWduw")
+        self.assertEqual(md.extract_youtube_id("https://www.youtube.com/shorts/Hwn_ThgWduw"), "Hwn_ThgWduw")
+        self.assertIsNone(md.extract_youtube_id("https://example.com/video.mp4"))
+
+        # Test cache discovery
+        cached = md._find_cached_video(
+            md.INPUTS_DIR,
+            title="I Asked An AI Billionaire How To Start A Business (10 Steps)",
+            v_id="Hwn_ThgWduw"
+        )
+        self.assertIsNotNone(cached)
+        self.assertTrue(os.path.isfile(cached))
+        self.assertIn("Billionaire", cached)
+
 
 if __name__ == "__main__":
     unittest.main()
