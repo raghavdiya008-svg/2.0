@@ -53,6 +53,32 @@ def _find_cookies_file() -> Optional[str]:
     env_c = os.environ.get("YOUTUBE_COOKIES_PATH")
     if env_c and os.path.isfile(env_c):
         return env_c
+
+    # Check for raw cookies content in environment variable
+    raw_env_c = os.environ.get("YOUTUBE_COOKIES")
+    if raw_env_c and len(raw_env_c.strip()) > 20:
+        c_dest = os.path.join(_PROJECT_ROOT, "cookies.txt")
+        try:
+            with open(c_dest, "w", encoding="utf-8") as f:
+                f.write(raw_env_c.strip())
+            return c_dest
+        except Exception:
+            pass
+
+    # Check for Kaggle User Secrets (Add-ons -> Secrets -> YOUTUBE_COOKIES)
+    try:
+        from kaggle_secrets import UserSecretsClient  # type: ignore
+        secrets = UserSecretsClient()
+        sec_c = secrets.get_secret("YOUTUBE_COOKIES")
+        if sec_c and len(sec_c.strip()) > 20:
+            c_dest = os.path.join(_PROJECT_ROOT, "cookies.txt")
+            with open(c_dest, "w", encoding="utf-8") as f:
+                f.write(sec_c.strip())
+            logger.info("Loaded YouTube cookies from Kaggle User Secrets (YOUTUBE_COOKIES).")
+            return c_dest
+    except Exception:
+        pass
+
     for path in candidates:
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             return path

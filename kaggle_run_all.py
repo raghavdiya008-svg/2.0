@@ -144,6 +144,19 @@ def setup_kaggle_environment():
                         print("  ✓ Loaded cookies.txt from dataset bundle.")
                     except Exception:
                         pass
+
+        # Check for Kaggle User Secrets (Add-ons -> Secrets -> YOUTUBE_COOKIES)
+        if not os.path.isfile("cookies.txt"):
+            try:
+                from kaggle_secrets import UserSecretsClient
+                secrets = UserSecretsClient()
+                yt_c = secrets.get_secret("YOUTUBE_COOKIES")
+                if yt_c and len(yt_c.strip()) > 20:
+                    with open("cookies.txt", "w", encoding="utf-8") as f:
+                        f.write(yt_c.strip())
+                    print("  ✓ Loaded cookies.txt from Kaggle User Secrets.")
+            except Exception:
+                pass
         else:
             print("\nℹ️ No offline Kaggle dataset attached. Running with dynamic online fetching.")
 
