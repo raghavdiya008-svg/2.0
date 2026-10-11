@@ -353,6 +353,14 @@ class BatchRenderRequest(BaseModel):
     margin_v: Optional[int] = None
     presentation_mode: bool = False
 
+class GeminiCurationRequest(BaseModel):
+    url: Optional[str] = None
+    file_name: Optional[str] = None
+    custom_transcript: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    model: Optional[str] = "gemini-3.5-flash"
+    target_clips: Optional[int] = 5
+
 class CameraZoneModel(BaseModel):
     id: str
     label: str
@@ -1108,6 +1116,147 @@ def api_curate(req: CurateRequest):
         return {"status": "queued", "process_id": pid}
     else:
         return _do_curate(req, pid)
+
+
+@app.post("/api/curate/gemini")
+def api_curate_gemini(req: GeminiCurationRequest):
+    """
+    Standalone Gemini AI Curation Extension.
+    Accepts a YouTube URL or video file, extracts timestamped dialogue lines
+    directly or uses custom text, prompts Gemini (gemini-3.5-flash / gemini-3.8-flash)
+    using the configured API key, and returns structured JSON with virality scores,
+    hook sentences, and generated file slugs ready for immediate 1-click loading into the gallery.
+    """
+    key = req.gemini_api_key or os.environ.get("GEMINI_API_KEY")
+    if not key:
+        config_path = os.path.join(_ROOT_DIR, "config", "gemini_key.txt")
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    key = f.read().strip()
+            except Exception:
+                pass
+    if not key:
+        raise HTTPException(status_code=400, detail="Gemini API Key is required. Please set GEMINI_API_KEY or configure config/gemini_key.txt.")
+
+    formatted_transcript = ""
+    video_title = "Video"
+    total_duration = 0.0
+
+    # 1. Check if URL provided
+    if req.url and req.url.strip():
+        u = req.url.strip()
+        if not (media_downloader.is_youtube_url(u) or media_downloader.is_gdrive_url(u)):
+            raise HTTPException(status_code=400, detail="Unsupported remote URL. Must be YouTube or Google Drive.")
+
+        lines = media_downloader.extract_youtube_transcript_with_timestamps(u)
+        if lines:
+            formatted_transcript = "\n".join(f"[{item['time_str']}] {item['text']}" for item in lines)
+            total_duration = lines[-1]["seconds"] if lines else 300.0
+        else:
+            # Fallback to local audio cache if already ingested
+            logger.info("[server] Direct YouTube caption scrape unavailable, checking local cache...")
+    elif req.file_name:
+        resolved = resolve_input_video_path(req.file_name)
+        if resolved and os.path.isfile(resolved):
+            video_title = os.path.splitext(os.path.basename(resolved))[0]
+            # Try loading cached transcript
+            temp_wav = os.path.join(TEMP_DIR, f"gemini_probe_{uuid.uuid4().hex[:8]}.wav")
+            try:
+                import audio_intelligence
+                audio_intelligence.extract_audio(resolved, temp_wav)
+                md5 = pipeline.compute_audio_stream_md5(temp_wav)
+                cached = pipeline._load_audio_cache(md5)
+                if cached and cached.get("words"):
+                    w_list = cached["words"]
+                    total_duration = float(w_list[-1].get("end", 0.0)) if w_list else 120.0
+                    formatted_transcript = curation_engine._build_transcript_text(w_list)
+            except Exception as e:
+                logger.warning(f"[server] Failed extracting transcript for Gemini: {e}")
+            finally:
+                if os.path.isfile(temp_wav):
+                    try:
+                        os.remove(temp_wav)
+                    except OSError:
+                        pass
+
+    # 2. Check custom user-pasted transcript
+    if req.custom_transcript and req.custom_transcript.strip():
+        formatted_transcript = req.custom_transcript.strip()
+        if total_duration <= 0:
+            total_duration = 1800.0  # estimate 30m if custom text without duration
+
+    if not formatted_transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract video transcript automatically. Please paste the transcript text with timestamps."
+        )
+
+    target_count = req.target_clips or 5
+    system_prompt = (
+        "You are an elite short-form video editor and viral content strategist (TikTok, YouTube Shorts, Instagram Reels).\n"
+        "Analyze the provided transcript and extract the top most viral, high-retention standalone moments.\n\n"
+        "Strict Selection Rules:\n"
+        "1. Duration: Each clip MUST be strictly between 30 and 60 seconds (strictly end - start >= 30 and <= 60).\n"
+        "2. Standalone Hook: The clip must start with a compelling question, shocking claim, or strong emotional hook—never mid-sentence.\n"
+        "3. Complete Story Arc: The clip must conclude with a satisfying punchline, lesson, or revelation.\n"
+        "4. No Overlap: Clips must not overlap in timestamps.\n\n"
+        "You MUST return a JSON array of objects with EXACTLY these keys:\n"
+        "  - 'title': Short punchy headline (Max 6 words)\n"
+        "  - 'hook_sentence': Exact opening sentence spoken by the speaker\n"
+        "  - 'start': float (start time in seconds)\n"
+        "  - 'end': float (end time in seconds)\n"
+        "  - 'virality_score': integer between 75 and 100\n"
+        "  - 'reason': 1-2 sentence explanation of why this moment retains short-form viewers"
+    )
+
+    user_prompt = (
+        f"Identify the top {target_count} most viral clips from this timestamped transcript:\n\n"
+        f"{formatted_transcript}\n\n"
+        f"Return strictly a raw JSON array of objects without markdown formatting or commentary."
+    )
+
+    model_to_use = req.model or "gemini-3.5-flash"
+    raw_response = curation_engine._call_gemini_native_api(
+        api_key=key,
+        model=model_to_use,
+        prompt=user_prompt,
+        system=system_prompt,
+        timeout=60.0
+    )
+
+    if not raw_response:
+        raise HTTPException(status_code=502, detail="Gemini API returned an empty response. Please verify key or retry.")
+
+    # Parse JSON
+    try:
+        clean_json_str = raw_response.strip()
+        match = re.search(r"\[\s*\{[\s\S]*\}\s*\]", clean_json_str)
+        if match:
+            clean_json_str = match.group(0)
+        parsed = json.loads(clean_json_str)
+        if isinstance(parsed, dict) and "clips" in parsed:
+            parsed = parsed["clips"]
+        if not isinstance(parsed, list):
+            raise ValueError("Expected JSON array of clips")
+    except Exception as e:
+        logger.error(f"[server] Failed parsing Gemini output: {e}\nRaw: {raw_response[:300]}")
+        raise HTTPException(status_code=502, detail=f"Failed to parse Gemini JSON: {e}")
+
+    # Validate, generate clean file slugs and output filenames
+    formatted_cuts = curation_engine.validate_and_format_cuts(
+        parsed,
+        total_duration=max(total_duration, 60.0),
+        file_name=req.file_name or "video"
+    )
+
+    return {
+        "status": "ok",
+        "model": model_to_use,
+        "total_clips": len(formatted_cuts),
+        "clips": formatted_cuts,
+        "raw_json": formatted_cuts
+    }
 
 # ---------------------------------------------------------------------------
 # Phase 3 & 4: Batch Render and ZIP Export Endpoints

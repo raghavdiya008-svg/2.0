@@ -1,4 +1,4 @@
-﻿# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -14,6 +14,9 @@ ENV/
 .env
 .env.*
 *.env
+config/gemini_key.txt
+config/*.txt
+cookies.txt
 
 # Ephemeral & large media directories
 inputs/*

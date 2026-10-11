@@ -119,6 +119,9 @@
             // Gemini Batch Importer State
             const [importModalOpen, setImportModalOpen] = useState(false);
             const [importRawText, setImportRawText] = useState('');
+            const [importUrl, setImportUrl] = useState('');
+            const [isFetchingGemini, setIsFetchingGemini] = useState(false);
+            const [geminiSuccessMsg, setGeminiSuccessMsg] = useState('');
             const [importAppendMode, setImportAppendMode] = useState(true);
             const [importError, setImportError] = useState('');
 
@@ -459,6 +462,50 @@
                     if ((c.virality_score || 0) >= minScore) indices.push(i);
                 });
                 setSelectedClipIndices(indices);
+            };
+
+            const handleFetchGeminiFromUrl = async () => {
+                const url = (importUrl || '').trim();
+                if (!url) {
+                    setImportError('Please enter a YouTube video URL.');
+                    return;
+                }
+                setImportError('');
+                setGeminiSuccessMsg('');
+                setIsFetchingGemini(true);
+                try {
+                    const res = await fetch('/api/curate/gemini', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            url: url,
+                            file_name: selectedVideo,
+                            custom_transcript: importRawText,
+                            target_clips: 6
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                        throw new Error(data.detail || 'Gemini API call failed');
+                    }
+                    if (data.clips && data.clips.length > 0) {
+                        setCuratedClips(prev => {
+                            if (importAppendMode) {
+                                return [...prev, ...data.clips];
+                            }
+                            return data.clips;
+                        });
+                        setSelectedClipIndices(data.clips.map((_, i) => i));
+                        setImportRawText(JSON.stringify(data.clips, null, 2));
+                        setGeminiSuccessMsg(`Gemini AI successfully curated ${data.clips.length} viral clips! Loaded into gallery.`);
+                    } else {
+                        setImportError('Gemini did not find any clips meeting the 30-60s threshold.');
+                    }
+                } catch (err) {
+                    setImportError(err.message || 'Failed to curate with Gemini API.');
+                } finally {
+                    setIsFetchingGemini(false);
+                }
             };
 
             const parseAndImportGeminiBatch = () => {
@@ -873,9 +920,60 @@
                                     </button>
                                 </div>
 
-                                <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs">
-                                        <label className="font-semibold text-slate-300">Paste Gemini Output (JSON or MM:SS List):</label>
+                                <div className="space-y-4">
+                                    {/* Extension Tab: Auto Curate from Video URL */}
+                                    <div className="p-3.5 bg-blue-950/30 border border-blue-500/20 rounded-2xl space-y-2.5">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
+                                                <Icon name="sparkles" className="w-3.5 h-3.5 text-blue-400" />
+                                                Gemini Auto-Curation Extension (Paste Video URL)
+                                            </span>
+                                            <span className="text-[10px] text-blue-400/80 font-mono bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
+                                                gemini-3.5-flash
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="text"
+                                                value={importUrl}
+                                                onChange={(e) => setImportUrl(e.target.value)}
+                                                placeholder="https://www.youtube.com/watch?v=..."
+                                                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={handleFetchGeminiFromUrl}
+                                                disabled={isFetchingGemini || !importUrl.trim()}
+                                                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-1.5 whitespace-nowrap transition active:scale-95"
+                                            >
+                                                {isFetchingGemini ? (
+                                                    <>
+                                                        <Icon name="loader-2" className="w-3.5 h-3.5 animate-spin" />
+                                                        Curating...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Icon name="sparkles" className="w-3.5 h-3.5" />
+                                                        Get .json via Gemini
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+                                        <p className="text-[11px] text-slate-400">
+                                            Pastes the video URL $\rightarrow$ fetches timestamps & extracts the top viral clips via Gemini API $\rightarrow$ populates the JSON below and feeds the system.
+                                        </p>
+                                    </div>
+
+                                    {/* Success Message Banner */}
+                                    {geminiSuccessMsg && (
+                                        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
+                                            <Icon name="check-circle" className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                                            <span>{geminiSuccessMsg}</span>
+                                        </div>
+                                    )}
+
+                                    <div className="flex items-center justify-between text-xs pt-1">
+                                        <label className="font-semibold text-slate-300">Or Paste / Edit Curated JSON Output:</label>
                                         <div className="flex items-center gap-2">
                                             <label className="flex items-center gap-1.5 cursor-pointer text-slate-300">
                                                 <input
@@ -890,7 +988,7 @@
                                     </div>
 
                                     <textarea
-                                        rows={10}
+                                        rows={8}
                                         value={importRawText}
                                         onChange={(e) => setImportRawText(e.target.value)}
                                         placeholder={`Example JSON:
@@ -900,13 +998,9 @@
     "start": 600.0,
     "end": 645.0,
     "virality_score": 95,
-    "hook_summary": "Bold counter-intuitive statement about pricing"
+    "hook_sentence": "Bold counter-intuitive statement about pricing"
   }
-]
-
-Or Plain Text:
-04:15 - 04:55 | The power of risk taking
-12:30 - 13:10 | How we scaled to $1M`}
+]`}
                                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3.5 font-mono text-xs text-slate-200 focus:outline-none focus:border-blue-500 custom-scrollbar resize-none"
                                     />
 

@@ -685,8 +685,8 @@ def get_cloud_api_config() -> Optional[Dict[str, str]]:
     if gemini_key:
         return {
             "api_key": gemini_key,
-            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-            "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
             "provider": "gemini",
         }
 
@@ -716,6 +716,72 @@ def get_cloud_api_config() -> Optional[Dict[str, str]]:
             "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             "provider": "openai",
         }
+
+    return None
+
+
+def _call_gemini_native_api(
+    api_key: str,
+    model: str,
+    prompt: str,
+    system: str,
+    timeout: float = 120.0
+) -> Optional[str]:
+    """Sends a generateContent request directly to the Gemini REST API using structured JSON mode."""
+    import urllib.request
+    import urllib.error
+
+    # Model fallbacks: prefer fast, available flash models
+    candidate_models = [model]
+    for fallback in ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-flash-latest"]:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
+
+    for m in candidate_models:
+        clean_model = m.replace("models/", "")
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
+        
+        full_text = f"{system}\n\nTask:\n{prompt}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": full_text}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.2
+            }
+        }
+
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                candidates = data.get("candidates", [])
+                if candidates and len(candidates) > 0:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts and "text" in parts[0]:
+                        return parts[0]["text"]
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8")
+            except Exception:
+                pass
+            logger.warning(f"[curation] Gemini API {clean_model} HTTP {e.code}: {e.reason} - {err_body[:200]}")
+            continue
+        except Exception as exc:
+            logger.warning(f"[curation] Gemini API call {clean_model} failed: {exc}")
+            continue
 
     return None
 
@@ -837,14 +903,23 @@ def score_transcript_with_api(
         f"Return strictly JSON formatted as {{\"clips\": [...]}}."
     )
 
-    raw_response = _call_openai_compatible_api(
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
-        prompt=user_prompt,
-        system=system_prompt,
-        timeout=120.0
-    )
+    if provider == "gemini":
+        raw_response = _call_gemini_native_api(
+            api_key=api_key,
+            model=model,
+            prompt=user_prompt,
+            system=system_prompt,
+            timeout=120.0
+        )
+    else:
+        raw_response = _call_openai_compatible_api(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            prompt=user_prompt,
+            system=system_prompt,
+            timeout=120.0
+        )
 
     if not raw_response:
         logger.warning(f"[curation] Cloud API call to {provider} returned empty response.")

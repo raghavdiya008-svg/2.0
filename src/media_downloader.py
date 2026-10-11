@@ -581,3 +581,85 @@ def download_media(url_or_path: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
             }
         else:
             raise FileNotFoundError(f"Source URL or local file could not be resolved: {url_or_path}")
+
+
+def extract_youtube_transcript_with_timestamps(url: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Extracts high-resolution timestamps and spoken dialogue lines directly from YouTube
+    without needing heavy local Whisper processing.
+    Returns: list of {"time_str": "MM:SS", "seconds": float, "text": str}
+    """
+    if not is_youtube_url(url):
+        return None
+    try:
+        from yt_dlp import YoutubeDL
+        ydl_opts = {
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+        }
+        cookies = _find_cookies_file()
+        if cookies:
+            ydl_opts["cookiefile"] = cookies
+
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url.strip(), download=False)
+            sub_dict = info.get("subtitles", {}) or {}
+            auto_dict = info.get("automatic_captions", {}) or {}
+
+            # Prioritize English subtitles/captions
+            en_candidates = []
+            for lang_key in ["en", "en-US", "en-GB", "en-CA", "en-orig"]:
+                if lang_key in sub_dict:
+                    en_candidates = sub_dict[lang_key]
+                    break
+                if lang_key in auto_dict:
+                    en_candidates = auto_dict[lang_key]
+                    break
+
+            if not en_candidates:
+                # Fallback to whatever first language is available
+                for k in sub_dict:
+                    en_candidates = sub_dict[k]
+                    break
+                if not en_candidates:
+                    for k in auto_dict:
+                        en_candidates = auto_dict[k]
+                        break
+
+            if not en_candidates:
+                return None
+
+            json3_formats = [s for s in en_candidates if s.get("ext") == "json3"]
+            target_url = json3_formats[0].get("url") if json3_formats else en_candidates[0].get("url")
+            if not target_url:
+                return None
+
+            req = urllib.request.Request(
+                target_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+            transcript_lines = []
+            for e in data.get("events", []):
+                t_ms = e.get("tStartMs", 0)
+                sec = round(t_ms / 1000.0, 2)
+                text = "".join(s.get("utf8", "") for s in e.get("segs", [])).strip()
+                # Clean musical notes / emojis
+                text_clean = re.sub(r"[\u266a\u266b\u266c\u2669\u266f#]+", "", text).strip()
+                if text_clean:
+                    m, s = divmod(int(sec), 60)
+                    h, m = divmod(m, 60)
+                    time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+                    transcript_lines.append({
+                        "time_str": time_str,
+                        "seconds": sec,
+                        "text": text_clean
+                    })
+
+            return transcript_lines if transcript_lines else None
+    except Exception as e:
+        logger.warning(f"[media_downloader] extract_youtube_transcript_with_timestamps error: {e}")
+        return None

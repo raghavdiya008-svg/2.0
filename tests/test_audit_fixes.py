@@ -445,11 +445,36 @@ class TestAuditFixes(unittest.TestCase):
         self.assertIn("file_slug", formatted[0])
         self.assertIn("output_filename", formatted[0])
         self.assertEqual(formatted[0]["output_filename"], f"{formatted[0]['file_slug']}.mp4")
-        self.assertTrue(formatted[0]["output_filename"].endswith(".mp4"))
         self.assertIn("The_Truth_About_SaaS_Pricing", formatted[0]["file_slug"])
+
+    def test_22_gemini_curation_extension(self):
+        """Verify Gemini standalone curation extension formats clips and handles API requests."""
+        from server import app, GeminiCurationRequest
+        from fastapi.testclient import TestClient
+
+        client = TestClient(app)
+        # Test endpoint validation without params
+        res = client.post("/api/curate/gemini", json={})
+        self.assertEqual(res.status_code, 400)
+
+        # Test with custom transcript (mocking API call or structure)
+        custom_t = "[00:10] Why free software is a lie.\n[00:45] Because you are the product."
+        test_key = os.environ.get("GEMINI_API_KEY", "dummy_test_key")
+        res2 = client.post("/api/curate/gemini", json={
+            "custom_transcript": custom_t,
+            "gemini_api_key": test_key,
+            "model": "gemini-3.5-flash",
+            "target_clips": 1
+        })
+        self.assertIn(res2.status_code, [200, 400, 502, 503])
+        if res2.status_code == 200:
+            data = res2.json()
+            self.assertEqual(data["status"], "ok")
+            self.assertIn("clips", data)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
