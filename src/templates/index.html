@@ -3624,8 +3624,8 @@
             // Ensure safe coordinate fallbacks (Default Preset 1: Top-Right to avoid subtitle overlap)
             const width = Math.max(40, Math.min(1080, watermarkPreset1?.width ?? 240));
             const opacity = watermarkPreset1?.opacity ?? 0.70;
-            const posX = Math.max(0, Math.min(1080 - width, watermarkPreset1?.x ?? 780));
-            const posY = Math.max(0, Math.min(1920 - 40, watermarkPreset1?.y ?? 50));
+            const posX = watermarkPreset1?.x ?? 780;
+            const posY = watermarkPreset1?.y ?? 50;
             const position = watermarkPreset1?.position || 'top_right';
             const enabled = watermarkPreset1?.enabled ?? true;
 
@@ -3661,14 +3661,14 @@
                 const next = {
                     ...watermarkPreset1,
                     position: pos,
-                    x: Math.max(0, Math.min(1080 - width, newX)),
-                    y: Math.max(0, Math.min(1920 - estH, newY))
+                    x: newX,
+                    y: newY
                 };
                 setWatermarkPreset1(next);
                 try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (e) {}
             };
 
-            // Fluid Pointer-Capture Dragging
+            // Fluid Pointer-Capture Dragging (Free unconstrained movement)
             const handleWatermarkPointerDown = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -3696,8 +3696,8 @@
                 const scaleX = 1080 / rect.width;
                 const scaleY = 1920 / rect.height;
 
-                const curX = Math.round(Math.max(0, Math.min(1080 - width, dragStartRef.current.initX + (deltaX * scaleX))));
-                const curY = Math.round(Math.max(0, Math.min(1920 - estH, dragStartRef.current.initY + (deltaY * scaleY))));
+                const curX = Math.round(dragStartRef.current.initX + (deltaX * scaleX));
+                const curY = Math.round(dragStartRef.current.initY + (deltaY * scaleY));
 
                 setWatermarkPreset1(prev => ({
                     ...prev,
@@ -3753,8 +3753,7 @@
 
                 setWatermarkPreset1(prev => ({
                     ...prev,
-                    width: newW,
-                    x: Math.min(prev.x, 1080 - newW)
+                    width: newW
                 }));
             };
 
@@ -3783,8 +3782,8 @@
                 const clickCanvasX = (clickX / rect.width) * 1080;
                 const clickCanvasY = (clickY / rect.height) * 1920;
 
-                const newVidX = Math.round(Math.max(0, Math.min(1080 - width, clickCanvasX - (width / 2))));
-                const newVidY = Math.round(Math.max(0, Math.min(1920 - estH, clickCanvasY - (estH / 2))));
+                const newVidX = Math.round(clickCanvasX - (width / 2));
+                const newVidY = Math.round(clickCanvasY - (estH / 2));
 
                 const next = {
                     ...watermarkPreset1,
@@ -3802,7 +3801,7 @@
                 const next = {
                     ...watermarkPreset1,
                     position: 'custom',
-                    [key]: key === 'x' ? Math.max(0, Math.min(1080 - width, num)) : Math.max(0, Math.min(1920 - estH, num))
+                    [key]: num
                 };
                 setWatermarkPreset1(next);
                 try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (e) {}
@@ -3942,9 +3941,9 @@
                                         onPointerUp={handleWatermarkPointerUp}
                                         style={{
                                             position: 'absolute',
-                                            left: `${Math.max(0, Math.min(100 - ((width / 1080) * 100), (posX / 1080) * 100))}%`,
-                                            top: `${Math.max(0, Math.min(95, (posY / 1920) * 100))}%`,
-                                            width: `${Math.max(4, Math.min(100, (width / 1080) * 100))}%`,
+                                            left: `${(posX / 1080) * 100}%`,
+                                            top: `${(posY / 1920) * 100}%`,
+                                            width: `${(width / 1080) * 100}%`,
                                             opacity: opacity,
                                             cursor: isDragging ? 'grabbing' : 'grab',
                                             touchAction: 'none',
@@ -4052,7 +4051,7 @@
                                                 value={width}
                                                 onChange={(e) => {
                                                     const val = Math.max(40, Math.min(1080, parseInt(e.target.value, 10) || 40));
-                                                    const next = { ...watermarkPreset1, width: val, x: Math.min(posX, 1080 - val) };
+                                                    const next = { ...watermarkPreset1, width: val };
                                                     setWatermarkPreset1(next);
                                                     try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
                                                 }}
@@ -4070,7 +4069,7 @@
                                         value={width}
                                         onChange={(e) => {
                                             const val = parseInt(e.target.value, 10);
-                                            const next = { ...watermarkPreset1, width: val, x: Math.min(posX, 1080 - val) };
+                                            const next = { ...watermarkPreset1, width: val };
                                             setWatermarkPreset1(next);
                                             try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
                                         }}
@@ -4091,7 +4090,7 @@
                                                 key={sz.label}
                                                 type="button"
                                                 onClick={() => {
-                                                    const next = { ...watermarkPreset1, width: sz.w, x: Math.min(posX, 1080 - sz.w) };
+                                                    const next = { ...watermarkPreset1, width: sz.w };
                                                     setWatermarkPreset1(next);
                                                     try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
                                                 }}
@@ -4107,34 +4106,50 @@
                                     </div>
                                 </div>
 
-                                {/* Precision Numeric Steppers */}
+                                {/* Precision Numeric Steppers & Sliders (Fully Freeform) */}
                                 <div className="space-y-2 bg-slate-950 p-4 rounded-2xl border border-slate-800">
                                     <label className="text-xs font-bold text-slate-300 block">Fine-Tuning Canvas Coordinates (1080×1920)</label>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
-                                            <div className="flex justify-between text-[11px] text-slate-400 mb-1.5">
-                                                <span>X Offset:</span>
-                                                <span className="font-mono text-blue-400 font-bold">{posX}px</span>
+                                        <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800 space-y-1.5">
+                                            <div className="flex justify-between items-center text-[11px] text-slate-400">
+                                                <span className="font-semibold">X Offset:</span>
+                                                <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-lg border border-slate-800">
+                                                    <input
+                                                        type="number"
+                                                        value={posX}
+                                                        onChange={(e) => updateCoords('x', e.target.value)}
+                                                        className="w-14 bg-transparent text-blue-400 font-mono font-bold text-xs text-right outline-none"
+                                                    />
+                                                    <span className="text-[10px] text-slate-500 font-mono">px</span>
+                                                </div>
                                             </div>
                                             <input
                                                 type="range"
-                                                min="0"
-                                                max={Math.max(0, 1080 - width)}
+                                                min="-200"
+                                                max="1080"
                                                 step="5"
                                                 value={posX}
                                                 onChange={(e) => updateCoords('x', e.target.value)}
                                                 className="w-full h-1.5 bg-slate-800 rounded accent-blue-500 cursor-pointer"
                                             />
                                         </div>
-                                        <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
-                                            <div className="flex justify-between text-[11px] text-slate-400 mb-1.5">
-                                                <span>Y Offset:</span>
-                                                <span className="font-mono text-blue-400 font-bold">{posY}px</span>
+                                        <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800 space-y-1.5">
+                                            <div className="flex justify-between items-center text-[11px] text-slate-400">
+                                                <span className="font-semibold">Y Offset:</span>
+                                                <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded-lg border border-slate-800">
+                                                    <input
+                                                        type="number"
+                                                        value={posY}
+                                                        onChange={(e) => updateCoords('y', e.target.value)}
+                                                        className="w-14 bg-transparent text-blue-400 font-mono font-bold text-xs text-right outline-none"
+                                                    />
+                                                    <span className="text-[10px] text-slate-500 font-mono">px</span>
+                                                </div>
                                             </div>
                                             <input
                                                 type="range"
-                                                min="0"
-                                                max={Math.max(0, 1920 - estH)}
+                                                min="-200"
+                                                max="1920"
                                                 step="5"
                                                 value={posY}
                                                 onChange={(e) => updateCoords('y', e.target.value)}
