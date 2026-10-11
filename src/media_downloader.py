@@ -415,11 +415,20 @@ def download_youtube_video(
                 if os.path.isfile(resolved) and resolved != safe_filename:
                     safe_filename = resolved
 
-        # Verify output file
+        # Verify output file (check .mp4, .mkv, .webm)
+        if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
+            for ext in [".mp4", ".mkv", ".webm"]:
+                cand = os.path.splitext(safe_filename)[0] + ext
+                if os.path.isfile(cand) and os.path.getsize(cand) > 1024 * 1024:
+                    safe_filename = cand
+                    break
+
         if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
             for f in os.listdir(output_dir):
+                if re.search(r"\.f\d+\.", f) or f.endswith((".part", ".ytdl")):
+                    continue
                 candidate = os.path.join(output_dir, f)
-                if (f.lower().endswith(".mp4")
+                if (f.lower().endswith((".mp4", ".mkv", ".webm"))
                         and os.path.getsize(candidate) > 1024 * 1024
                         and (sanitize_filename(os.path.splitext(f)[0])[:20] == safe_base[:20]
                              or (v_id and v_id in f))):
@@ -466,9 +475,18 @@ def download_youtube_video(
                         safe_filename = resolved
 
             if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
+                for ext in [".mp4", ".mkv", ".webm"]:
+                    cand = os.path.splitext(safe_filename)[0] + ext
+                    if os.path.isfile(cand) and os.path.getsize(cand) > 1024 * 1024:
+                        safe_filename = cand
+                        break
+
+            if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
                 for f in os.listdir(output_dir):
+                    if re.search(r"\.f\d+\.", f) or f.endswith((".part", ".ytdl")):
+                        continue
                     candidate = os.path.join(output_dir, f)
-                    if (f.lower().endswith(".mp4")
+                    if (f.lower().endswith((".mp4", ".mkv", ".webm"))
                             and os.path.getsize(candidate) > 1024 * 1024
                             and (sanitize_filename(os.path.splitext(f)[0])[:20] == safe_base[:20]
                                  or (v_id and v_id in f))):
@@ -678,24 +696,43 @@ def extract_youtube_transcript_with_timestamps(url: str) -> Optional[List[Dict[s
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             )
             with urllib.request.urlopen(req, timeout=12) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                raw_bytes = resp.read()
+                raw_text = raw_bytes.decode("utf-8", errors="ignore")
 
             transcript_lines = []
-            for e in data.get("events", []):
-                t_ms = e.get("tStartMs", 0)
-                sec = round(t_ms / 1000.0, 2)
-                text = "".join(s.get("utf8", "") for s in e.get("segs", [])).strip()
-                # Clean musical notes / emojis
-                text_clean = re.sub(r"[\u266a\u266b\u266c\u2669\u266f#]+", "", text).strip()
-                if text_clean:
-                    m, s = divmod(int(sec), 60)
-                    h, m = divmod(m, 60)
-                    time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-                    transcript_lines.append({
-                        "time_str": time_str,
-                        "seconds": sec,
-                        "text": text_clean
-                    })
+            try:
+                data = json.loads(raw_text)
+                for e in data.get("events", []):
+                    t_ms = e.get("tStartMs", 0)
+                    sec = round(t_ms / 1000.0, 2)
+                    text = "".join(s.get("utf8", "") for s in e.get("segs", [])).strip()
+                    # Clean musical notes / emojis
+                    text_clean = re.sub(r"[\u266a\u266b\u266c\u2669\u266f#]+", "", text).strip()
+                    if text_clean:
+                        m, s = divmod(int(sec), 60)
+                        h, m = divmod(m, 60)
+                        time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+                        transcript_lines.append({
+                            "time_str": time_str,
+                            "seconds": sec,
+                            "text": text_clean
+                        })
+            except Exception:
+                # Fallback: XML subtitle parsing (<text start="12.3" dur="4.5">...)
+                xml_matches = re.findall(r'<text\s+start="([\d.]+)"[^>]*>(.*?)</text>', raw_text, flags=re.DOTALL)
+                for start_str, txt in xml_matches:
+                    sec = round(float(start_str), 2)
+                    clean_t = html.unescape(re.sub(r'<[^>]+>', '', txt)).strip()
+                    clean_t = re.sub(r"[\u266a\u266b\u266c\u2669\u266f#]+", "", clean_t).strip()
+                    if clean_t:
+                        m, s = divmod(int(sec), 60)
+                        h, m = divmod(m, 60)
+                        time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+                        transcript_lines.append({
+                            "time_str": time_str,
+                            "seconds": sec,
+                            "text": clean_t
+                        })
 
             return transcript_lines if transcript_lines else None
     except Exception as e:
