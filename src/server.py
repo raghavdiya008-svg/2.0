@@ -80,6 +80,7 @@ else:
 ASSETS_DIR = os.path.join(_ROOT_DIR, "assets")
 TEMP_DIR = os.path.join(_ROOT_DIR, "temp")
 LOGO_DIR = os.path.join(_ROOT_DIR, "assets", "logo")
+BGM_DIR = os.path.join(_ROOT_DIR, "assets", "bgm")
 EMOJIS_DIR = os.path.join(_ROOT_DIR, "assets", "emojis")
 
 os.makedirs(INPUTS_DIR, exist_ok=True)
@@ -87,6 +88,7 @@ os.makedirs(ASSETS_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 os.makedirs(LOGO_DIR, exist_ok=True)
+os.makedirs(BGM_DIR, exist_ok=True)
 os.makedirs(EMOJIS_DIR, exist_ok=True)
 
 from engine_ffmpeg import render_clip, is_nvenc_available, get_cfr_args, RenderOptions, create_zip_archive
@@ -272,6 +274,21 @@ def _resolve_logo_path(logo_input: Optional[str]) -> Optional[str]:
         return None
     return resolved if os.path.isfile(resolved) else None
 
+def _resolve_bgm_path(bgm_input: Optional[str]) -> Optional[str]:
+    """
+    Safely resolves a BGM audio filename or relative path strictly within BGM_DIR.
+    Rejects path traversals and arbitrary system files.
+    """
+    if not bgm_input or not str(bgm_input).strip():
+        return None
+    raw = str(bgm_input).strip()
+    safe_base = secure_filename(os.path.basename(raw))
+    resolved = os.path.abspath(os.path.join(BGM_DIR, safe_base))
+    if os.path.commonpath([resolved, os.path.abspath(BGM_DIR)]) != os.path.abspath(BGM_DIR):
+        logger.warning(f"[server] Path traversal attempt in BGM parameter rejected: {bgm_input}")
+        return None
+    return resolved if os.path.isfile(resolved) else None
+
 # ---------------------------------------------------------------------------
 # Pydantic Request Models
 # ---------------------------------------------------------------------------
@@ -307,6 +324,10 @@ class RenderRequest(BaseModel):
     headline_text: Optional[str] = None
     brand_logo_path: Optional[str] = None
     watermark_logo_path: Optional[str] = None
+    watermark_coords: Optional[Dict[str, Any]] = None
+    bgm_track: Optional[str] = None
+    bgm_volume: Optional[float] = 0.12
+    bgm_ducking: Optional[bool] = True
     speed_factor: Optional[float] = None
     start: Optional[float] = None
     end: Optional[float] = None
@@ -345,6 +366,10 @@ class BatchRenderRequest(BaseModel):
     file_name: str
     clips: List[Dict[str, Any]]
     watermark_logo: Optional[str] = None
+    watermark_coords: Optional[Dict[str, Any]] = None
+    bgm_track: Optional[str] = None
+    bgm_volume: Optional[float] = 0.12
+    bgm_ducking: Optional[bool] = True
     brand_logo: Optional[str] = None
     speed: float = 1.0
     aspect_ratio: str = "9:16"
@@ -645,6 +670,10 @@ def _run_render_job(job_data, **kwargs):
             headline_text=final_headline,
             brand_logo_path=job_data.get("brand_logo_path"),
             watermark_logo_path=job_data.get("watermark_logo_path"),
+            watermark_coords=job_data.get("watermark_coords"),
+            bgm_path=job_data.get("bgm_path"),
+            bgm_volume=job_data.get("bgm_volume"),
+            bgm_ducking=job_data.get("bgm_ducking"),
             speed_factor=job_data.get("speed_factor", job_data.get("speed", 1.0)),
         )
     finally:
@@ -1335,6 +1364,10 @@ def api_render_batch(req: BatchRenderRequest):
                 "presentation_mode": bool(clip.get("presentation_mode", getattr(req, "presentation_mode", False))),
                 "brand_logo_path": _resolve_logo_path(req.brand_logo),
                 "watermark_logo_path": _resolve_logo_path(req.watermark_logo),
+                "watermark_coords": req.watermark_coords or clip.get("watermark_coords"),
+                "bgm_path": _resolve_bgm_path(req.bgm_track or clip.get("bgm_track")),
+                "bgm_volume": req.bgm_volume if req.bgm_volume is not None else clip.get("bgm_volume", 0.12),
+                "bgm_ducking": req.bgm_ducking if req.bgm_ducking is not None else clip.get("bgm_ducking", True),
                 "words": cached_words,
                 "file_slug": clip.get("file_slug"),
                 "output_filename": clip.get("output_filename"),
@@ -1496,6 +1529,13 @@ def list_assets():
             if f.lower().endswith(('.png', '.jpg', '.jpeg')) and "verified" not in f.lower()
         ])
     
+    bgm_tracks = []
+    if os.path.isdir(BGM_DIR):
+        bgm_tracks = sorted([
+            f for f in os.listdir(BGM_DIR)
+            if f.lower().endswith(('.mp3', '.wav', '.m4a', '.ogg', '.aac'))
+        ])
+
     try:
         from media_downloader import _find_cookies_file
         has_cookies = bool(_find_cookies_file())
@@ -1505,6 +1545,7 @@ def list_assets():
     return {
         "videos": videos,
         "logos": logos,
+        "bgm_tracks": bgm_tracks,
         "has_cookies": has_cookies,
         "free_disk_gb": _get_disk_free_gb(),
     }

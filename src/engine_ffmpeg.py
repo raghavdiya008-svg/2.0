@@ -81,10 +81,13 @@ class RenderOptions:
     auto_adjust: float = 0.0
     auto_color_correct: float = 0.0
     strip_social_ui: bool = False
-    speed_factor: Optional[float] = None
     headline_text: Optional[str] = None
     brand_logo_path: Optional[str] = None
     watermark_logo_path: Optional[str] = None
+    watermark_coords: Optional[dict] = None
+    bgm_path: Optional[str] = None
+    bgm_volume: float = 0.12
+    bgm_ducking: bool = True
 
 
 def _has_dialogue_events(ass_path: Optional[str]) -> bool:
@@ -424,11 +427,16 @@ def build_ffmpeg_command(
     headline_text: Optional[str] = None,
     brand_logo_path: Optional[str] = None,
     watermark_logo_path: Optional[str] = None,
+    watermark_coords: Optional[dict] = None,
+    bgm_path: Optional[str] = None,
+    bgm_volume: Optional[float] = None,
+    bgm_ducking: Optional[bool] = None,
     speed_factor: Optional[float] = None,
 ) -> Tuple[List[str], Optional[str]]:
     """
     Constructs the single-pass filter_complex FFmpeg command as a list of args
-    with aspect-ratio preserving scaling, duration hardening, and subtitle rendering.
+    with aspect-ratio preserving scaling, duration hardening, subtitle rendering,
+    customizable watermark positioning/preset, and smart BGM audio ducking.
 
     Standardizes input video to 30 FPS ([0:v]fps=30,setpts=PTS-STARTPTS...)
     to lock Variable Frame Rate (VFR) clips to a constant timestamp grid.
@@ -438,13 +446,19 @@ def build_ffmpeg_command(
     pad_color = opts.bg_color.lower() if opts.bg_color and opts.bg_color.lower() in ["white", "black"] else "white"
 
     # Resolve speed factor
-    speed_val = speed_factor if speed_factor is not None else (opts.speed_factor if opts.speed_factor is not None else opts.speed)
+    speed_val = speed_factor if speed_factor is not None else (getattr(opts, "speed_factor", None) if getattr(opts, "speed_factor", None) is not None else opts.speed)
     speed = max(0.5, min(3.0, float(speed_val)))
 
     # Resolve branding & headline parameters
     brand_path = brand_logo_path if brand_logo_path is not None else opts.brand_logo_path
     watermark_path = watermark_logo_path if watermark_logo_path is not None else opts.watermark_logo_path
+    wm_coords = watermark_coords if watermark_coords is not None else getattr(opts, "watermark_coords", None)
     headline = headline_text if headline_text is not None else opts.headline_text
+
+    # Resolve BGM parameters
+    active_bgm_path = bgm_path if bgm_path is not None else getattr(opts, "bgm_path", None)
+    active_bgm_vol = float(bgm_volume if bgm_volume is not None else getattr(opts, "bgm_volume", 0.12))
+    active_bgm_ducking = bool(bgm_ducking if bgm_ducking is not None else getattr(opts, "bgm_ducking", True))
 
     cmd = ["ffmpeg", "-y", "-i", input_path]
     next_input_idx = 1
@@ -468,6 +482,13 @@ def build_ffmpeg_command(
     if watermark_path and str(watermark_path).strip():
         cmd.extend(["-loop", "1", "-i", str(watermark_path).strip()])
         watermark_input_idx = next_input_idx
+        next_input_idx += 1
+
+    # Optional BGM Audio Input (stream_loop -1 for seamless infinite background looping)
+    bgm_input_idx = None
+    if active_bgm_path and str(active_bgm_path).strip() and os.path.isfile(str(active_bgm_path).strip()):
+        cmd.extend(["-stream_loop", "-1", "-i", str(active_bgm_path).strip()])
+        bgm_input_idx = next_input_idx
         next_input_idx += 1
 
     # Emoji Inputs completely removed as per Phase 3 configuration
@@ -787,13 +808,56 @@ def build_ffmpeg_command(
         )
         current_label = "[comp_brand]"
 
-    # 4c. Optional Watermark Logo Composite (Bottom-right, 30px padding, 50% opacity)
+    # 4c. Optional Watermark Logo Composite (Customizable Position, Preset, Scale & Opacity)
     if watermark_input_idx is not None:
+        opacity = 0.5
+        scale_w = -1
+        scale_h = -1
+        overlay_x = "W-w-30"
+        overlay_y = "H-h-30"
+
+        if isinstance(wm_coords, dict):
+            # Check opacity
+            if wm_coords.get("opacity") is not None:
+                try:
+                    opacity = max(0.05, min(1.0, float(wm_coords["opacity"])))
+                except (ValueError, TypeError):
+                    opacity = 0.5
+            
+            # Check scale / width
+            if wm_coords.get("width") is not None and float(wm_coords["width"]) > 0:
+                scale_w = int(round(float(wm_coords["width"])))
+            elif wm_coords.get("scale") is not None:
+                # scale relative to 1080 canvas width (e.g. 0.20 = 216px)
+                scale_w = int(round(1080 * float(wm_coords["scale"])))
+            else:
+                scale_w = 250
+
+            # Check position / snap presets
+            preset_pos = wm_coords.get("position")
+            if preset_pos == "top_right":
+                overlay_x, overlay_y = "W-w-30", "30"
+            elif preset_pos == "top_left":
+                overlay_x, overlay_y = "30", "30"
+            elif preset_pos == "bottom_left":
+                overlay_x, overlay_y = "30", "H-h-30"
+            elif preset_pos == "bottom_right":
+                overlay_x, overlay_y = "W-w-30", "H-h-30"
+            elif preset_pos == "center":
+                overlay_x, overlay_y = "(W-w)/2", "(H-h)/2"
+            elif wm_coords.get("x") is not None and wm_coords.get("y") is not None:
+                overlay_x = str(int(round(float(wm_coords["x"]))))
+                overlay_y = str(int(round(float(wm_coords["y"]))))
+        else:
+            scale_w = 250
+
+        # Scale watermark
+        scale_expr = f"scale={scale_w}:-1" if scale_w > 0 else "scale='min(250,iw)':-1"
         filter_complex_parts.append(
-            f"[{watermark_input_idx}:v]scale='min(250,iw)':-1,format=rgba,colorchannelmixer=aa=0.5[wm_semi]"
+            f"[{watermark_input_idx}:v]{scale_expr},format=rgba,colorchannelmixer=aa={opacity:.2f}[wm_semi]"
         )
         filter_complex_parts.append(
-            f"{current_label}[wm_semi]overlay=W-w-30:H-h-30[comp_wm]"
+            f"{current_label}[wm_semi]overlay={overlay_x}:{overlay_y}[comp_wm]"
         )
         current_label = "[comp_wm]"
 
@@ -894,10 +958,23 @@ def build_ffmpeg_command(
         # Static drawtext header banners are completely purged
         filter_complex_parts.append(f"{current_label}null,format=yuv420p[vout]")
 
+    # 7. Audio Filter Graph: Speech + Optional Background Music (BGM) with Ducking
+    has_bgm = bgm_input_idx is not None
+    if has_bgm:
+        # Normalize dialogue speech with loudnorm first
+        filter_complex_parts.append("[0:a]aresample=48000,loudnorm=I=-14:TP=-1.5:LRA=11[a_dialogue]")
+        # Scale BGM volume
+        bgm_v = max(0.01, min(1.0, active_bgm_vol))
+        if active_bgm_ducking:
+            # Sidechain ducking: when dialogue is loud, duck BGM; during pauses, smoothly swell
+            filter_complex_parts.append(f"[{bgm_input_idx}:a]aresample=48000,volume={bgm_v:.3f}[bgm_raw]")
+            filter_complex_parts.append("[bgm_raw][a_dialogue]sidechaincompress=threshold=0.08:ratio=5:attack=15:release=250[bgm_ducked]")
+            filter_complex_parts.append("[a_dialogue][bgm_ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]")
+        else:
+            filter_complex_parts.append(f"[{bgm_input_idx}:a]aresample=48000,volume={bgm_v:.3f}[bgm_leveled]")
+            filter_complex_parts.append("[a_dialogue][bgm_leveled]amix=inputs=2:duration=first:dropout_transition=2[aout]")
+    
     filter_complex = ";".join(filter_complex_parts)
-
-    # Audio filter chain locked strictly to native playback with broadcast loudnorm mastering (-14 LUFS)
-    audio_filter_str = "aresample=async=1,loudnorm=I=-14:TP=-1.5:LRA=11"
 
     preset_val = opts.preset if opts.preset.startswith("p") else "p6"
     cq_val = getattr(opts, "cq", 20)
@@ -907,13 +984,23 @@ def build_ffmpeg_command(
     maxrate_val = getattr(opts, "maxrate", "12M")
     bufsize_val = getattr(opts, "bufsize", "24M")
 
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[vout]",
-        "-map", "0:a?",
-        "-filter:a", audio_filter_str,
-        *get_cfr_args(),
-    ])
+    if has_bgm:
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-map", "[aout]",
+            *get_cfr_args(),
+        ])
+    else:
+        # Audio filter chain locked strictly to native playback with broadcast loudnorm mastering (-14 LUFS)
+        audio_filter_str = "aresample=async=1,loudnorm=I=-14:TP=-1.5:LRA=11"
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-map", "0:a?",
+            "-filter:a", audio_filter_str,
+            *get_cfr_args(),
+        ])
     
     if is_nvenc_available():
         cmd.extend([
@@ -966,8 +1053,11 @@ def render_clip(
     trajectory: Optional[dict] = None,
     timeout: Optional[float] = 600.0,
     headline_text: Optional[str] = None,
-    brand_logo_path: Optional[str] = None,
     watermark_logo_path: Optional[str] = None,
+    watermark_coords: Optional[dict] = None,
+    bgm_path: Optional[str] = None,
+    bgm_volume: Optional[float] = None,
+    bgm_ducking: Optional[bool] = None,
     speed_factor: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     """
@@ -985,6 +1075,9 @@ def render_clip(
         raise FileNotFoundError(f"Brand logo file not found: {brand_logo_path}")
     if watermark_logo_path and not os.path.isfile(watermark_logo_path):
         raise FileNotFoundError(f"Watermark logo file not found: {watermark_logo_path}")
+    if bgm_path and not os.path.isfile(bgm_path):
+        logger.warning(f"BGM audio file not found: {bgm_path}. Rendering without BGM.")
+        bgm_path = None
 
     # Normalize empty or missing subtitle file path to None
     if ass_path is not None:
@@ -1007,6 +1100,10 @@ def render_clip(
         headline_text=headline_text,
         brand_logo_path=brand_logo_path,
         watermark_logo_path=watermark_logo_path,
+        watermark_coords=watermark_coords,
+        bgm_path=bgm_path,
+        bgm_volume=bgm_volume,
+        bgm_ducking=bgm_ducking,
         speed_factor=speed_factor,
     )
 
