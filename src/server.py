@@ -1281,7 +1281,7 @@ def api_curate_gemini(req: GeminiCurationRequest):
 
         lines = media_downloader.extract_youtube_transcript_with_timestamps(u)
         if lines:
-            formatted_transcript = "\n".join(f"[{item['time_str']}] {item['text']}" for item in lines)
+            formatted_transcript = "\n".join(f"[{int(item['seconds'])}s | {item['time_str']}] {item['text']}" for item in lines)
             total_duration = lines[-1]["seconds"] if lines else 300.0
         else:
             # Fallback to local audio cache if already ingested
@@ -1322,31 +1322,35 @@ def api_curate_gemini(req: GeminiCurationRequest):
             detail="Could not extract video transcript automatically. Please paste the transcript text with timestamps."
         )
 
-    target_count = req.target_clips or 5
+    target_count = req.target_clips or 6
     system_prompt = (
         "You are an elite short-form video editor and viral content strategist (TikTok, YouTube Shorts, Instagram Reels).\n"
-        "Analyze the provided transcript and extract the top most viral, high-retention standalone moments.\n\n"
+        "Analyze the provided transcript and extract viral standalone moments spread across the entire episode.\n\n"
         "Strict Selection Rules:\n"
         "1. Duration: Each clip MUST be strictly between 30 and 60 seconds (strictly end - start >= 30 and <= 60).\n"
-        "2. Standalone Hook: The clip must start with a compelling question, shocking claim, or strong emotional hook—never mid-sentence.\n"
-        "3. Complete Story Arc: The clip must conclude with a satisfying punchline, lesson, or revelation.\n"
-        "4. No Overlap: Clips must not overlap in timestamps.\n\n"
+        "2. Timestamps: 'start' and 'end' MUST be numbers in TOTAL SECONDS from the start of the video.\n"
+        "   Use the integer second number given in [Xs | MM:SS] (e.g. for [1509s | 25:09], start is 1509.0, NOT 25.0!).\n"
+        "3. Diversity: Extract clips from DIFFERENT parts of the episode (beginning, middle, and end). Never cluster clips in only one small section.\n"
+        "4. Standalone Hook: The clip must start with a compelling question, shocking claim, or strong emotional hook—never mid-sentence.\n"
+        "5. Complete Story Arc: The clip must conclude with a satisfying punchline, lesson, or revelation.\n"
+        "6. No Overlap: Clips must not overlap in timestamps.\n\n"
         "You MUST return a JSON array of objects with EXACTLY these keys:\n"
         "  - 'title': Short punchy headline (Max 6 words)\n"
         "  - 'hook_sentence': Exact opening sentence spoken by the speaker\n"
-        "  - 'start': float (start time in seconds)\n"
-        "  - 'end': float (end time in seconds)\n"
+        "  - 'start': float (start time in total seconds)\n"
+        "  - 'end': float (end time in total seconds)\n"
         "  - 'virality_score': integer between 75 and 100\n"
         "  - 'reason': 1-2 sentence explanation of why this moment retains short-form viewers"
     )
 
     user_prompt = (
-        f"Identify the top {target_count} most viral clips from this timestamped transcript:\n\n"
+        f"This video is {int(total_duration)} seconds ({int(total_duration/60)} minutes) long.\n"
+        f"Identify the top {target_count} most viral clips spread across different parts of this timestamped transcript:\n\n"
         f"{formatted_transcript}\n\n"
         f"Return strictly a raw JSON array of objects without markdown formatting or commentary."
     )
 
-    model_to_use = req.model or "gemini-3.5-flash-lite"
+    model_to_use = req.model or "gemini-3.8-flash"
     raw_response = curation_engine._call_gemini_native_api(
         api_key=key,
         model=model_to_use,
@@ -1372,6 +1376,36 @@ def api_curate_gemini(req: GeminiCurationRequest):
     except Exception as e:
         logger.error(f"[server] Failed parsing Gemini output: {e}\nRaw: {raw_response[:300]}")
         raise HTTPException(status_code=502, detail=f"Failed to parse Gemini JSON: {e}")
+
+    # Normalize timestamps: handle MM:SS strings or decimal minutes from LLM
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        for key_name in ["start", "end", "start_time", "end_time"]:
+            if key_name in item:
+                val = item[key_name]
+                if isinstance(val, str) and ":" in val:
+                    parts = val.split(":")
+                    sec = 0.0
+                    for p in parts:
+                        sec = sec * 60.0 + float(p)
+                    item[key_name] = sec
+                else:
+                    try:
+                        item[key_name] = float(val)
+                    except Exception:
+                        pass
+        s_val = float(item.get("start", item.get("start_time", 0.0)))
+        e_val = float(item.get("end", item.get("end_time", 0.0)))
+        if total_duration > 600.0 and s_val < 60.0 and (s_val * 60.0) < total_duration:
+            if 0 < (e_val - s_val) <= 2.5:
+                # LLM outputted decimal minutes: convert to seconds
+                item["start"] = round(s_val * 60.0, 2)
+                item["end"] = round(e_val * 60.0, 2)
+                if "start_time" in item:
+                    item["start_time"] = item["start"]
+                if "end_time" in item:
+                    item["end_time"] = item["end"]
 
     # Validate, generate clean file slugs and output filenames
     formatted_cuts = curation_engine.validate_and_format_cuts(

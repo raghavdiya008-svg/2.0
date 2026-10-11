@@ -546,10 +546,14 @@
                     }
                     if (data.clips && data.clips.length > 0) {
                         setCuratedClips(prev => {
-                            if (importAppendMode) {
-                                return [...prev, ...data.clips];
-                            }
-                            return data.clips;
+                            const list = importAppendMode ? [...prev, ...data.clips] : data.clips;
+                            const seen = new Set();
+                            return list.filter(c => {
+                                const key = `${Math.round(c.start)}_${Math.round(c.end)}`;
+                                if (seen.has(key)) return false;
+                                seen.add(key);
+                                return true;
+                            });
                         });
                         setSelectedClipIndices(data.clips.map((_, i) => i));
                         setImportRawText(JSON.stringify(data.clips, null, 2));
@@ -683,7 +687,13 @@
 
                 setCuratedClips(prev => {
                     const combined = importAppendMode ? [...prev, ...newClips] : newClips;
-                    return combined;
+                    const seen = new Set();
+                    return combined.filter(c => {
+                        const key = `${Math.round(c.start)}_${Math.round(c.end)}`;
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    });
                 });
 
                 // Auto-select the imported clips

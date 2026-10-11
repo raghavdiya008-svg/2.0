@@ -182,9 +182,10 @@ def validate_and_format_cuts(
             v_score = 85
 
         slug = item.get("file_slug") or generate_clip_slug(sentence, s, e, base_name=base_stem)
-        out_fn = item.get("output_filename") or f"{slug}.mp4"
+        title = str(item.get("title") or sentence or f"Clip #{len(validated) + 1}")
 
         validated.append({
+            "title":          title,
             "start":          s,
             "end":            e,
             "start_time":     s,
