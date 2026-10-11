@@ -214,8 +214,10 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
 
-        # Multi-sample across first 10 seconds to robustly detect all speakers
-        sample_timestamps = [1.5, 3.0, 5.0, 8.0, 12.0]
+        # Multi-sample across first 90 seconds to robustly detect real human speakers
+        video_dur_sec = total_frames / max(1.0, fps)
+        sample_timestamps = [2.0, 5.0, 12.0, 25.0, 45.0, 70.0]
+        sample_timestamps = [ts for ts in sample_timestamps if ts < video_dur_sec] or [1.0, 3.0]
         frames_to_check = []
         for ts in sample_timestamps:
             f_idx = min(max(0, int(fps * ts)), max(0, total_frames - 1))
@@ -229,19 +231,18 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
     if not frames_to_check:
         return _build_default_podcast_config(file_name, sw, sh)
 
-    # Detect human subjects/faces via engine_vision (InsightFace SCRFD primary)
-    all_face_dets: List[Any] = []
+    # Detect human subjects/faces per frame via engine_vision (InsightFace SCRFD primary)
+    per_frame_dets: List[List[Any]] = []
     try:
         from engine_vision import detect_faces_or_subjects
         for fr in frames_to_check:
             dets = detect_faces_or_subjects(fr, prefer_insightface=True)
-            if dets:
-                all_face_dets.extend(dets)
+            per_frame_dets.append(dets or [])
     except Exception as e:
         logger.debug(f"[camera_framing] InsightFace/vision detection fallback: {e}")
 
     # Fallback to Haar Cascade if 0 faces found
-    if not all_face_dets:
+    if not any(per_frame_dets):
         try:
             if hasattr(cv2, "data") and hasattr(cv2, "CascadeClassifier"):
                 cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -249,21 +250,66 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
                     face_cascade = cv2.CascadeClassifier(cascade_path)
                     for fr in frames_to_check:
                         gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(80, 80))
+                        f_list = []
                         for (x, y, w, h) in faces:
                             from engine_vision import FaceDetection
-                            all_face_dets.append(FaceDetection(
+                            f_list.append(FaceDetection(
                                 box=(int(x), int(y), int(w), int(h)),
                                 landmark_center=(float(x + w / 2.0), float(y + h * 0.4))
                             ))
+                        per_frame_dets.append(f_list)
         except Exception as e:
             logger.debug(f"[camera_framing] Haar detection error: {e}")
 
-    # Filter out tiny spurious detections (less than 8% frame height)
-    min_h = int(sh * 0.08)
-    valid_faces = [f for f in all_face_dets if f.box[3] >= min_h]
+    all_face_dets = [d for sub in per_frame_dets for d in sub]
+    if not all_face_dets:
+        return _build_default_podcast_config(file_name, sw, sh)
 
-    # Cluster detections into Left (Host) and Right (Guest)
+    # Determine dominant face scale to filter out background posters/wall illustrations
+    max_detected_h = max([f.box[3] for f in all_face_dets], default=0)
+    min_h = max(int(sh * 0.12), int(max_detected_h * 0.50), 100)
+
+    # Filter detections per frame by valid size
+    filtered_per_frame: List[List[Any]] = [
+        [f for f in f_dets if f.box[3] >= min_h]
+        for f_dets in per_frame_dets
+    ]
+
+    # Verify simultaneous two-shot: AT LEAST ONE frame MUST have >= 2 valid people
+    # simultaneously on screen separated by at least 22% frame width!
+    # A single speaker moving/shifting left and right across different frames is NOT a dual podcast!
+    has_simultaneous_two_shot = False
+    for f_dets in filtered_per_frame:
+        if len(f_dets) >= 2:
+            centers = [
+                d.landmark_center[0] if getattr(d, "landmark_center", None) is not None else (d.box[0] + d.box[2] / 2.0)
+                for d in f_dets
+            ]
+            if (max(centers) - min(centers)) >= (sw * 0.22):
+                has_simultaneous_two_shot = True
+                break
+
+    valid_faces = [f for sub in filtered_per_frame for f in sub]
+    if not has_simultaneous_two_shot:
+        # Verified Solo Speaker video (or single camera angle without simultaneous co-host)
+        if valid_faces:
+            best_face = max(valid_faces, key=lambda f: f.box[2] * f.box[3])
+            hz = _box_to_zone(
+                "zone_host", "Solo Speaker", best_face.box, sw, sh,
+                speaker="SPEAKER_00", color="#3b82f6",
+                landmark_center=getattr(best_face, "landmark_center", None)
+            )
+            wz = CameraZone(
+                id="zone_wide", label="Full Wide Shot", x=0, y=0, width=sw, height=sh, is_wide=True, color="#8b5cf6"
+            )
+            logger.info(f"[camera_framing] Identified Solo Speaker layout (0 simultaneous two-shot frames). Zone: {hz.x}, {hz.width}x{hz.height}")
+            return CameraFramingConfig(
+                file_name=file_name, source_width=sw, source_height=sh, mode="solo", split_preference="wide", zones=[hz, wz]
+            )
+        return _build_default_podcast_config(file_name, sw, sh)
+
+    # Multi-speaker podcast branch: Simultaneous two-shot verified
     left_faces = []
     right_faces = []
     left_bound = sw * 0.48
@@ -276,6 +322,8 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         elif cx > right_bound:
             right_faces.append(f)
 
+    # Face scale parity check: Both podcast speakers must have comparable size.
+    is_valid_dual_speaker = False
     if left_faces and right_faces:
         def _get_coords(f: Any) -> Tuple[float, float, float, float]:
             bx, by, bw, bh = f.box
@@ -287,20 +335,32 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         l_coords = [_get_coords(f) for f in left_faces]
         r_coords = [_get_coords(f) for f in right_faces]
 
+        med_lbh = statistics.median([c[3] for c in l_coords])
+        med_rbh = statistics.median([c[3] for c in r_coords])
+
+        size_ratio = min(med_lbh, med_rbh) / max(med_lbh, med_rbh)
+        if size_ratio >= 0.55:
+            is_valid_dual_speaker = True
+        else:
+            logger.info(f"[camera_framing] Ignoring background face cluster (size ratio {size_ratio:.2f}). Favoring dominant speaker.")
+            if med_lbh > med_rbh:
+                right_faces = []
+            else:
+                left_faces = []
+
+    if is_valid_dual_speaker and left_faces and right_faces:
         med_lx = statistics.median([c[0] for c in l_coords])
         med_ly = statistics.median([c[1] for c in l_coords])
         med_lbw = statistics.median([c[2] for c in l_coords])
-        med_lbh = statistics.median([c[3] for c in l_coords])
 
         med_rx = statistics.median([c[0] for c in r_coords])
         med_ry = statistics.median([c[1] for c in r_coords])
         med_rbw = statistics.median([c[2] for c in r_coords])
-        med_rbh = statistics.median([c[3] for c in r_coords])
 
         midpoint = (med_lx + med_rx) / 2.0
         sep = med_rx - med_lx
         max_clean_w = int(min(sep * 0.85, (midpoint - med_lx) * 1.75, (med_rx - midpoint) * 1.75, sw * 0.38))
-        max_clean_w = max(200, max_clean_w)
+        max_clean_w = max(240, max_clean_w)
 
         hz = _box_to_zone(
             "zone_host", "Host (Left)",

@@ -854,8 +854,8 @@ def build_ffmpeg_command(
         else:
             scale_w = -1
 
-        # Scale watermark
-        scale_expr = f"scale={scale_w}:-1" if scale_w > 0 else "scale='min(250,iw)':-1"
+        # Scale watermark ensuring even dimensions for FFmpeg encoder
+        scale_expr = f"scale={scale_w}:-2" if scale_w > 0 else "scale='min(250,iw)':-2"
         op_str = f"{opacity:g}"
         filter_complex_parts.append(
             f"[{watermark_input_idx}:v]{scale_expr},format=rgba,colorchannelmixer=aa={op_str}[wm_semi]"
@@ -913,12 +913,12 @@ def build_ffmpeg_command(
             font_opt = f"fontfile='{font_esc}':"
 
         # High-impact typography styling: bold border outline + drop shadow + sleek contrast pill box
+        # Persistent headline ensures viewer retaining context regardless of when they swipe in
         drawtext_style = (
             f"x=(w-text_w)/2:y={banner_y}:fontsize={f_size}:fontcolor=white:line_spacing=12:"
             f"box=1:boxcolor=black@0.75:boxborderw=18:"
             f"borderw=3:bordercolor=black@0.90:"
-            f"shadowx=4:shadowy=4:shadowcolor=black@0.85:"
-            f"enable='between(t,0,4.5)'"
+            f"shadowx=4:shadowy=4:shadowcolor=black@0.85"
         )
 
         if temp_text_file and os.path.isfile(temp_text_file):

@@ -139,21 +139,30 @@
             const [batchChunkSize, setBatchChunkSize] = useState(10); // 5, 10, 15, 20
             const [activeBatchIndex, setActiveBatchIndex] = useState(0); // 0-indexed batch page
 
-            // Watermark Preset 1 State (Defaults to DC PNG.png at bottom-right with 50% opacity, 240px width)
+            // Watermark Preset 1 State (Defaults to DC PNG.png at Top-Right safe zone with 70% opacity, 240px width)
             const [watermarkModalOpen, setWatermarkModalOpen] = useState(false);
             const [watermarkPreset1, setWatermarkPreset1] = useState(() => {
                 try {
                     const saved = localStorage.getItem('watermark_preset_1');
-                    if (saved) return JSON.parse(saved);
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        // Upgrade legacy preset that defaulted right onto subtitles (Y=1650) to safe top-right
+                        if (parsed && (parsed.y === 1650 || (parsed.position === 'bottom_right' && parsed.y > 1550))) {
+                            parsed.position = 'top_right';
+                            parsed.x = 780;
+                            parsed.y = 50;
+                        }
+                        return parsed;
+                    }
                 } catch (e) {}
                 return {
                     enabled: true,
                     file: 'DC PNG.png',
-                    position: 'bottom_right', // 'bottom_right' | 'top_right' | 'top_left' | 'bottom_left' | 'center' | 'custom'
-                    x: 820,
-                    y: 1650,
+                    position: 'top_right', // 'top_right' | 'top_left' | 'above_subs' | 'bottom_right' | 'bottom_left' | 'center' | 'custom'
+                    x: 780,
+                    y: 50,
                     width: 240,
-                    opacity: 0.65,
+                    opacity: 0.70,
                     name: 'Preset 1'
                 };
             });
@@ -521,9 +530,19 @@
                             target_clips: 6
                         })
                     });
-                    const data = await res.json();
+                    const responseText = await res.text();
+                    let data = null;
+                    if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
+                        throw new Error('Cloudflare Gateway Timeout (504/524): The request timed out over the tunnel. Please retry with a faster connection or paste timestamps directly.');
+                    }
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (parseErr) {
+                        throw new Error(`Invalid response from server: ${responseText.slice(0, 150)}`);
+                    }
+
                     if (!res.ok) {
-                        throw new Error(data.detail || 'Gemini API call failed');
+                        throw new Error(data?.detail || data?.message || 'Gemini API call failed');
                     }
                     if (data.clips && data.clips.length > 0) {
                         setCuratedClips(prev => {
@@ -1062,7 +1081,7 @@
                                                     Query Gemini API via YouTube URL
                                                 </span>
                                                 <span className="text-[10px] text-blue-400/80 font-mono bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
-                                                    gemini-3.5-flash
+                                                    gemini-3.5-flash-lite
                                                 </span>
                                             </div>
                                             {/* API Key Configuration input */}
@@ -3592,97 +3611,180 @@
             if (!isOpen) return null;
 
             const containerRef = useRef(null);
+            const isDraggingRef = useRef(false);
+            const isResizingRef = useRef(false);
+            const dragStartRef = useRef({ pointerX: 0, pointerY: 0, initX: 0, initY: 0, initW: 240 });
+            const justFinishedDragRef = useRef(false);
             const [isDragging, setIsDragging] = useState(false);
-            const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
             const [imgError, setImgError] = useState(false);
 
             // Active video frame background if video exists
             const activeVideo = selectedVideo || (videos && videos.length > 0 ? videos[0] : '');
 
-            // Ensure safe coordinate fallbacks
-            const width = watermarkPreset1?.width ?? 240;
-            const opacity = watermarkPreset1?.opacity ?? 0.65;
-            const posX = watermarkPreset1?.x ?? 820;
-            const posY = watermarkPreset1?.y ?? 1650;
-            const position = watermarkPreset1?.position || 'bottom_right';
+            // Ensure safe coordinate fallbacks (Default Preset 1: Top-Right to avoid subtitle overlap)
+            const width = Math.max(40, Math.min(1080, watermarkPreset1?.width ?? 240));
+            const opacity = watermarkPreset1?.opacity ?? 0.70;
+            const posX = Math.max(0, Math.min(1080 - width, watermarkPreset1?.x ?? 780));
+            const posY = Math.max(0, Math.min(1920 - 40, watermarkPreset1?.y ?? 50));
+            const position = watermarkPreset1?.position || 'top_right';
             const enabled = watermarkPreset1?.enabled ?? true;
+
+            // Subtitle collision detector: Subtitles render at Y=1500 to Y=1800
+            const estH = Math.round(width * 0.75);
+            const isCollidingWithSubs = (posY + estH > 1460 && posY < 1850);
 
             // Snap positioning presets (relative to 1080x1920 canvas)
             const snapTo = (pos) => {
                 let newX = posX;
                 let newY = posY;
-                const estHeight = Math.round(width * 0.75);
 
                 if (pos === 'top_left') {
                     newX = 40;
-                    newY = 40;
+                    newY = 50;
                 } else if (pos === 'top_right') {
-                    newX = 1080 - width - 40;
-                    newY = 40;
+                    newX = Math.max(0, 1080 - width - 40);
+                    newY = 50;
+                } else if (pos === 'above_subs') {
+                    newX = Math.round((1080 - width) / 2);
+                    newY = 1380;
                 } else if (pos === 'bottom_left') {
                     newX = 40;
-                    newY = 1920 - estHeight - 60;
+                    newY = Math.max(0, 1920 - estH - 50);
                 } else if (pos === 'bottom_right') {
-                    newX = 1080 - width - 40;
-                    newY = 1920 - estHeight - 60;
+                    newX = Math.max(0, 1080 - width - 40);
+                    newY = Math.max(0, 1920 - estH - 50);
                 } else if (pos === 'center') {
                     newX = Math.round((1080 - width) / 2);
-                    newY = Math.round((1920 - estHeight) / 2);
+                    newY = Math.round((1920 - estH) / 2);
                 }
 
                 const next = {
                     ...watermarkPreset1,
                     position: pos,
                     x: Math.max(0, Math.min(1080 - width, newX)),
-                    y: Math.max(0, Math.min(1920 - estHeight, newY))
+                    y: Math.max(0, Math.min(1920 - estH, newY))
                 };
                 setWatermarkPreset1(next);
                 try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (e) {}
             };
 
-            // Drag Start handler
-            const handleMouseDown = (e) => {
+            // Fluid Pointer-Capture Dragging
+            const handleWatermarkPointerDown = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (!containerRef.current) return;
-                const rect = containerRef.current.getBoundingClientRect();
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-                // Relative click coordinates inside the container
-                const clickX = clientX - rect.left;
-                const clickY = clientY - rect.top;
-
-                // Current watermark position in preview pixels
-                const currentPxX = (posX / 1080) * rect.width;
-                const currentPxY = (posY / 1920) * rect.height;
-
-                setDragOffset({
-                    x: clickX - currentPxX,
-                    y: clickY - currentPxY
-                });
+                try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                } catch (err) {}
+                isDraggingRef.current = true;
+                dragStartRef.current = {
+                    pointerX: e.clientX,
+                    pointerY: e.clientY,
+                    initX: posX,
+                    initY: posY,
+                    initW: width
+                };
                 setIsDragging(true);
+            };
+
+            const handleWatermarkPointerMove = (e) => {
+                if (!isDraggingRef.current || !containerRef.current) return;
+                const rect = containerRef.current.getBoundingClientRect();
+                const deltaX = e.clientX - dragStartRef.current.pointerX;
+                const deltaY = e.clientY - dragStartRef.current.pointerY;
+
+                // Scale deltas from screen preview pixels to 1080x1920 canvas
+                const scaleX = 1080 / rect.width;
+                const scaleY = 1920 / rect.height;
+
+                const curX = Math.round(Math.max(0, Math.min(1080 - width, dragStartRef.current.initX + (deltaX * scaleX))));
+                const curY = Math.round(Math.max(0, Math.min(1920 - estH, dragStartRef.current.initY + (deltaY * scaleY))));
+
+                setWatermarkPreset1(prev => ({
+                    ...prev,
+                    position: 'custom',
+                    x: curX,
+                    y: curY
+                }));
+            };
+
+            const handleWatermarkPointerUp = (e) => {
+                if (isDraggingRef.current) {
+                    isDraggingRef.current = false;
+                    setIsDragging(false);
+                    try {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                    } catch (err) {}
+                    justFinishedDragRef.current = true;
+                    setTimeout(() => { justFinishedDragRef.current = false; }, 250);
+                    try {
+                        localStorage.setItem('watermark_preset_1', JSON.stringify({
+                            ...watermarkPreset1,
+                            position: 'custom',
+                            x: posX,
+                            y: posY
+                        }));
+                    } catch (err) {}
+                }
+            };
+
+            // Corner Resize Handle Pointer Dragging
+            const handleResizePointerDown = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                } catch (err) {}
+                isResizingRef.current = true;
+                dragStartRef.current = {
+                    pointerX: e.clientX,
+                    pointerY: e.clientY,
+                    initX: posX,
+                    initY: posY,
+                    initW: width
+                };
+            };
+
+            const handleResizePointerMove = (e) => {
+                if (!isResizingRef.current || !containerRef.current) return;
+                const rect = containerRef.current.getBoundingClientRect();
+                const deltaX = e.clientX - dragStartRef.current.pointerX;
+                const scaleX = 1080 / rect.width;
+                const newW = Math.round(Math.max(40, Math.min(1080, dragStartRef.current.initW + (deltaX * scaleX))));
+
+                setWatermarkPreset1(prev => ({
+                    ...prev,
+                    width: newW,
+                    x: Math.min(prev.x, 1080 - newW)
+                }));
+            };
+
+            const handleResizePointerUp = (e) => {
+                if (isResizingRef.current) {
+                    isResizingRef.current = false;
+                    try {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                    } catch (err) {}
+                    justFinishedDragRef.current = true;
+                    setTimeout(() => { justFinishedDragRef.current = false; }, 250);
+                    try {
+                        localStorage.setItem('watermark_preset_1', JSON.stringify(watermarkPreset1));
+                    } catch (err) {}
+                }
             };
 
             // Canvas Click-to-Place handler
             const handleCanvasClick = (e) => {
-                if (isDragging) return;
+                if (isDraggingRef.current || justFinishedDragRef.current || isResizingRef.current) return;
                 if (!containerRef.current) return;
                 const rect = containerRef.current.getBoundingClientRect();
-                const clientX = e.clientX;
-                const clientY = e.clientY;
+                const clickX = e.clientX - rect.left;
+                const clickY = e.clientY - rect.top;
 
-                const clickX = clientX - rect.left;
-                const clickY = clientY - rect.top;
+                const clickCanvasX = (clickX / rect.width) * 1080;
+                const clickCanvasY = (clickY / rect.height) * 1920;
 
-                const wmPrevW = (width / 1080) * rect.width;
-                const wmPrevH = wmPrevW * 0.75;
-
-                const targetPxX = Math.max(0, Math.min(rect.width - wmPrevW, clickX - (wmPrevW / 2)));
-                const targetPxY = Math.max(0, Math.min(rect.height - wmPrevH, clickY - (wmPrevH / 2)));
-
-                const newVidX = Math.round((targetPxX / rect.width) * 1080);
-                const newVidY = Math.round((targetPxY / rect.height) * 1920);
+                const newVidX = Math.round(Math.max(0, Math.min(1080 - width, clickCanvasX - (width / 2))));
+                const newVidY = Math.round(Math.max(0, Math.min(1920 - estH, clickCanvasY - (estH / 2))));
 
                 const next = {
                     ...watermarkPreset1,
@@ -3694,66 +3796,13 @@
                 try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
             };
 
-            // Freeform Window Dragging Event Listener
-            useEffect(() => {
-                if (!isDragging) return;
-
-                const handleMove = (e) => {
-                    if (!containerRef.current) return;
-                    const rect = containerRef.current.getBoundingClientRect();
-                    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-                    const previewW = rect.width;
-                    const previewH = rect.height;
-                    const wmPrevW = (width / 1080) * previewW;
-                    const wmPrevH = wmPrevW * 0.75;
-
-                    let curX = clientX - rect.left - dragOffset.x;
-                    let curY = clientY - rect.top - dragOffset.y;
-
-                    // Clamped within 9:16 phone mockup bounds
-                    curX = Math.max(0, Math.min(previewW - wmPrevW, curX));
-                    curY = Math.max(0, Math.min(previewH - wmPrevH, curY));
-
-                    const vidX = Math.round((curX / previewW) * 1080);
-                    const vidY = Math.round((curY / previewH) * 1920);
-
-                    setWatermarkPreset1(prev => ({
-                        ...prev,
-                        position: 'custom',
-                        x: vidX,
-                        y: vidY
-                    }));
-                };
-
-                const handleUp = () => {
-                    setIsDragging(false);
-                    try {
-                        localStorage.setItem('watermark_preset_1', JSON.stringify(watermarkPreset1));
-                    } catch (e) {}
-                };
-
-                window.addEventListener('mousemove', handleMove);
-                window.addEventListener('mouseup', handleUp);
-                window.addEventListener('touchmove', handleMove);
-                window.addEventListener('touchend', handleUp);
-
-                return () => {
-                    window.removeEventListener('mousemove', handleMove);
-                    window.removeEventListener('mouseup', handleUp);
-                    window.removeEventListener('touchmove', handleMove);
-                    window.removeEventListener('touchend', handleUp);
-                };
-            }, [isDragging, dragOffset, width, watermarkPreset1]);
-
             const updateCoords = (key, val) => {
                 const num = parseInt(val, 10);
                 if (isNaN(num)) return;
                 const next = {
                     ...watermarkPreset1,
                     position: 'custom',
-                    [key]: key === 'x' ? Math.max(0, Math.min(1080, num)) : Math.max(0, Math.min(1920, num))
+                    [key]: key === 'x' ? Math.max(0, Math.min(1080 - width, num)) : Math.max(0, Math.min(1920 - estH, num))
                 };
                 setWatermarkPreset1(next);
                 try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (e) {}
@@ -3763,11 +3812,11 @@
                 const next = {
                     enabled: true,
                     file: 'DC PNG.png',
-                    position: 'bottom_right',
-                    x: 800,
-                    y: 1650,
+                    position: 'top_right',
+                    x: 780,
+                    y: 50,
                     width: 240,
-                    opacity: 0.65,
+                    opacity: 0.70,
                     name: 'Preset 1'
                 };
                 setWatermarkPreset1(next);
@@ -3777,36 +3826,36 @@
             const logoUrl = `/assets/logo/${encodeURIComponent(watermarkPreset1?.file || 'DC PNG.png')}`;
 
             return (
-                <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-                    <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-5 sm:p-6 space-y-4 shadow-2xl animate-scale-in my-auto">
+                <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full p-5 sm:p-6 space-y-4 shadow-2xl animate-scale-in my-auto">
                         {/* Header */}
                         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                             <div className="flex items-center gap-3">
-                                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-lg text-white shadow-md shadow-blue-500/20">
+                                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-500 flex items-center justify-center text-xl text-white shadow-lg shadow-blue-500/25">
                                     🎨
                                 </div>
                                 <div>
                                     <div className="flex items-center gap-2">
                                         <h3 className="text-base font-bold text-white">Watermark Placement Studio</h3>
-                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/40">
                                             Preset 1
                                         </span>
                                     </div>
-                                    <p className="text-xs text-slate-400">Drag freely anywhere on screen — automatically burns into all batch renders</p>
+                                    <p className="text-xs text-slate-400">Large high-res canvas • Fluid grab & drag • Unlimited scale up to 1080px</p>
                                 </div>
                             </div>
                             <button
                                 onClick={onClose}
-                                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition"
+                                className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition"
                             >
                                 ✕
                             </button>
                         </div>
 
-                        {/* Top Banner: File & Enable Switch */}
+                        {/* Top Bar: Watermark Status & Burn Toggle */}
                         <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-950 rounded-2xl border border-slate-800">
                             <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 p-1 flex items-center justify-center overflow-hidden">
+                                <div className="w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 p-1 flex items-center justify-center overflow-hidden">
                                     <img
                                         src={logoUrl}
                                         alt="DC PNG"
@@ -3816,10 +3865,12 @@
                                 </div>
                                 <div>
                                     <div className="text-xs font-bold text-white">DC PNG.png (Preset 1)</div>
-                                    <div className="text-[11px] text-slate-400">Watermark Asset • {width}px Width • {Math.round(opacity * 100)}% Opacity</div>
+                                    <div className="text-[11px] text-slate-400">
+                                        Active Canvas: <span className="text-blue-400 font-mono font-bold">{width}px Width</span> • <span className="text-indigo-400 font-mono font-bold">{Math.round(opacity * 100)}% Opacity</span>
+                                    </div>
                                 </div>
                             </div>
-                            <label className="flex items-center gap-2.5 cursor-pointer bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 hover:border-slate-700 transition">
+                            <label className="flex items-center gap-2.5 cursor-pointer bg-slate-900 px-3.5 py-2 rounded-xl border border-slate-800 hover:border-slate-700 transition">
                                 <input
                                     type="checkbox"
                                     checked={enabled}
@@ -3837,22 +3888,22 @@
                         </div>
 
                         {/* Interactive Stage */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
-                            {/* Left: 9:16 Phone Mockup Canvas */}
-                            <div className="flex flex-col items-center">
-                                <div className="flex items-center justify-between w-full max-w-[220px] mb-1.5 px-1">
-                                    <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
-                                        📱 9:16 Simulator
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                            {/* Left: Large High-Res 9:16 Phone Mockup Canvas (5 cols) */}
+                            <div className="lg:col-span-5 flex flex-col items-center">
+                                <div className="flex items-center justify-between w-full max-w-[320px] mb-2 px-1">
+                                    <span className="text-xs font-mono text-slate-400 flex items-center gap-1 font-semibold">
+                                        📱 9:16 Canvas Simulator
                                     </span>
-                                    <span className="text-[10px] font-mono text-blue-400 font-bold">
-                                        1080×1920
+                                    <span className="text-[11px] font-mono text-blue-400 font-bold bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
+                                        1080×1920 Native
                                     </span>
                                 </div>
 
                                 <div
                                     ref={containerRef}
                                     onClick={handleCanvasClick}
-                                    className="relative w-52 sm:w-56 h-[370px] sm:h-[395px] bg-slate-950 rounded-[28px] border-4 border-slate-700 shadow-2xl overflow-hidden select-none cursor-crosshair group flex flex-col justify-between"
+                                    className="relative w-72 sm:w-80 md:w-[320px] h-[512px] sm:h-[568px] md:h-[568px] bg-slate-950 rounded-[32px] border-4 border-slate-700 shadow-2xl overflow-hidden select-none cursor-crosshair flex flex-col justify-between"
                                 >
                                     {/* Video frame preview or background */}
                                     {activeVideo ? (
@@ -3864,106 +3915,120 @@
                                         />
                                     ) : (
                                         <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-slate-900 to-black pointer-events-none flex flex-col items-center justify-center text-center p-4">
-                                            <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-500 mb-2">
+                                            <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 mb-2 text-xl">
                                                 🎬
                                             </div>
-                                            <span className="text-[10px] text-slate-500 font-mono">No video selected</span>
+                                            <span className="text-xs text-slate-400 font-mono">No video frame selected</span>
                                         </div>
                                     )}
 
                                     {/* Phone dynamic notch */}
-                                    <div className="relative z-10 w-16 h-3 bg-black/80 rounded-full mx-auto mt-2 pointer-events-none border border-white/10" />
+                                    <div className="relative z-10 w-20 h-3.5 bg-black/85 rounded-full mx-auto mt-2.5 pointer-events-none border border-white/10" />
 
-                                    {/* Subtitle Zone safe guide */}
-                                    <div className="relative z-10 mx-3 mb-8 h-10 bg-blue-500/10 border border-dashed border-blue-400/30 rounded-lg flex items-center justify-center pointer-events-none backdrop-blur-[1px]">
-                                        <span className="text-[9px] text-blue-300 font-mono tracking-wider font-semibold">
-                                            Subtitle Zone (Auto Safe)
+                                    {/* Subtitle Zone safe guide at Y=1500 - 1800 */}
+                                    <div className="absolute left-3 right-3 bottom-10 h-16 bg-red-500/10 border-2 border-dashed border-red-500/35 rounded-2xl flex flex-col items-center justify-center pointer-events-none z-10 backdrop-blur-[1px]">
+                                        <span className="text-[10px] text-red-300 font-extrabold tracking-wider uppercase flex items-center gap-1">
+                                            ⚠️ Subtitle Zone (Captions Render Here)
+                                        </span>
+                                        <span className="text-[8px] text-red-400 font-mono">
+                                            Keep watermark at Top-Right / Top-Left to prevent collision
                                         </span>
                                     </div>
 
                                     {/* Draggable Watermark Item */}
                                     <div
-                                        onMouseDown={handleMouseDown}
-                                        onTouchStart={handleMouseDown}
+                                        onPointerDown={handleWatermarkPointerDown}
+                                        onPointerMove={handleWatermarkPointerMove}
+                                        onPointerUp={handleWatermarkPointerUp}
                                         style={{
                                             position: 'absolute',
                                             left: `${Math.max(0, Math.min(100 - ((width / 1080) * 100), (posX / 1080) * 100))}%`,
                                             top: `${Math.max(0, Math.min(95, (posY / 1920) * 100))}%`,
-                                            width: `${Math.max(12, Math.min(80, (width / 1080) * 100))}%`,
+                                            width: `${Math.max(4, Math.min(100, (width / 1080) * 100))}%`,
                                             opacity: opacity,
                                             cursor: isDragging ? 'grabbing' : 'grab',
+                                            touchAction: 'none',
                                             zIndex: 30
                                         }}
-                                        className={`group/wm select-none transition-shadow rounded-lg p-0.5 ${
-                                            isDragging ? 'ring-2 ring-blue-400 shadow-2xl scale-[1.02]' : 'hover:ring-1 hover:ring-blue-400/60'
-                                        }`}
+                                        className={`group/wm select-none rounded-xl p-1 relative transition-shadow ${
+                                            isDragging ? 'ring-2 ring-blue-400 shadow-2xl scale-[1.02]' : 'hover:ring-2 hover:ring-blue-400/70 shadow-lg'
+                                        } ${isCollidingWithSubs ? 'border-2 border-red-400' : ''}`}
                                     >
                                         {!imgError ? (
                                             <img
                                                 src={logoUrl}
                                                 alt="Watermark"
-                                                className="w-full h-auto object-contain drop-shadow-xl pointer-events-none select-none"
+                                                className="w-full h-auto object-contain drop-shadow-2xl pointer-events-none select-none"
                                                 onError={() => setImgError(true)}
                                             />
                                         ) : (
-                                            <div className="w-full py-2 bg-blue-600/80 border border-blue-300 rounded text-center text-white font-black text-[10px] select-none shadow">
+                                            <div className="w-full py-3 bg-blue-600/90 border border-blue-300 rounded-lg text-center text-white font-black text-xs select-none shadow">
                                                 DC PNG
                                             </div>
                                         )}
 
                                         {/* Floating Badge Coordinates */}
-                                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap bg-blue-600/90 text-white text-[8px] font-mono px-1 rounded shadow pointer-events-none opacity-0 group-hover/wm:opacity-100 transition">
-                                            {posX}, {posY}
+                                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap bg-slate-900/95 border border-blue-500/40 text-blue-300 text-[9px] font-mono px-2 py-0.5 rounded shadow-lg pointer-events-none opacity-0 group-hover/wm:opacity-100 transition">
+                                            X: {posX} • Y: {posY} ({width}px)
                                         </div>
+
+                                        {/* Corner Resize Handle */}
+                                        <div
+                                            onPointerDown={handleResizePointerDown}
+                                            onPointerMove={handleResizePointerMove}
+                                            onPointerUp={handleResizePointerUp}
+                                            className="absolute -bottom-1 -right-1 w-4 h-4 bg-blue-500 border border-white rounded-full cursor-nwse-resize shadow flex items-center justify-center opacity-70 group-hover/wm:opacity-100 hover:scale-125 transition"
+                                            title="Drag corner to resize watermark freely"
+                                        />
                                     </div>
 
                                     {/* Bottom home indicator */}
-                                    <div className="relative z-10 w-20 h-1 bg-white/30 rounded-full mx-auto mb-1.5 pointer-events-none" />
+                                    <div className="relative z-10 w-24 h-1 bg-white/40 rounded-full mx-auto mb-2 pointer-events-none" />
                                 </div>
 
-                                <div className="mt-2 text-center">
-                                    <span className="text-[11px] font-mono font-bold text-blue-400">
+                                <div className="mt-2.5 text-center">
+                                    <span className="text-xs font-mono font-bold text-blue-400">
                                         X: {posX}px • Y: {posY}px ({position === 'custom' ? 'Custom Freeform' : position})
                                     </span>
-                                    <p className="text-[10px] text-slate-500 mt-0.5">
-                                        💡 Click & drag watermark freely across screen
-                                    </p>
+                                    {isCollidingWithSubs && (
+                                        <div className="text-[10px] text-red-400 font-semibold mt-1 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded-full inline-block">
+                                            ⚠️ Warning: Watermark overlaps captions! Move to Top.
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
-                            {/* Right: Controls & Presets */}
-                            <div className="space-y-4">
+                            {/* Right: Controls, Presets & Freeform Sizing (7 cols) */}
+                            <div className="lg:col-span-7 space-y-4">
                                 {/* Preset Snap Buttons */}
-                                <div>
-                                    <div className="flex items-center justify-between mb-2">
+                                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+                                    <div className="flex items-center justify-between">
                                         <label className="text-xs font-bold text-slate-300">Quick Snap Preset</label>
                                         <button
                                             type="button"
                                             onClick={resetToDefault}
-                                            className="text-[11px] text-slate-400 hover:text-blue-400 transition"
+                                            className="text-[11px] text-blue-400 hover:text-blue-300 font-semibold transition"
                                         >
-                                            Reset Default
+                                            Reset to Top-Right
                                         </button>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-1.5">
+                                    <div className="grid grid-cols-3 gap-2">
                                         {[
+                                            { id: 'top_right', label: 'Top-Right (Safe ★)' },
                                             { id: 'top_left', label: 'Top-Left' },
-                                            { id: 'top_right', label: 'Top-Right' },
-                                            { id: 'bottom_left', label: 'Bottom-Left' },
+                                            { id: 'above_subs', label: 'Above Subs' },
                                             { id: 'bottom_right', label: 'Bottom-Right' },
+                                            { id: 'bottom_left', label: 'Bottom-Left' },
                                             { id: 'center', label: 'Center' },
-                                            { id: 'custom', label: 'Freeform Drag' }
                                         ].map(pos => (
                                             <button
                                                 key={pos.id}
                                                 type="button"
-                                                onClick={() => {
-                                                    if (pos.id !== 'custom') snapTo(pos.id);
-                                                }}
-                                                className={`py-1.5 px-2.5 rounded-xl text-xs font-semibold border transition ${
+                                                onClick={() => snapTo(pos.id)}
+                                                className={`py-2 px-2.5 rounded-xl text-xs font-semibold border transition ${
                                                     position === pos.id
-                                                        ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-500/20'
-                                                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                                                        ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-500/25'
+                                                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
                                                 }`}
                                             >
                                                 {pos.label}
@@ -3972,73 +4037,117 @@
                                     </div>
                                 </div>
 
-                                {/* Precision Numeric Steppers */}
-                                <div>
-                                    <label className="text-xs font-bold text-slate-300 block mb-1.5">Canvas Coordinates (1080×1920)</label>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div className="bg-slate-950 p-2 rounded-xl border border-slate-800">
-                                            <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                                                <span>X Offset:</span>
-                                                <span className="font-mono text-blue-400">{posX}px</span>
-                                            </div>
-                                            <input
-                                                type="range"
-                                                min="0"
-                                                max={1080 - width}
-                                                step="10"
-                                                value={posX}
-                                                onChange={(e) => updateCoords('x', e.target.value)}
-                                                className="w-full h-1 bg-slate-800 rounded accent-blue-500 cursor-pointer"
-                                            />
+                                {/* Width / Scale Slider & Direct Numeric Input (Unlimited Enlargement) */}
+                                <div className="space-y-3 bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <span className="text-xs font-bold text-slate-300">Watermark Size / Scale:</span>
+                                            <p className="text-[11px] text-slate-400">Enlarge as much as desired up to 1080px (full canvas width)</p>
                                         </div>
-                                        <div className="bg-slate-950 p-2 rounded-xl border border-slate-800">
-                                            <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                                                <span>Y Offset:</span>
-                                                <span className="font-mono text-blue-400">{posY}px</span>
-                                            </div>
+                                        <div className="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded-xl border border-slate-800">
                                             <input
-                                                type="range"
-                                                min="0"
-                                                max={1920 - Math.round(width * 0.75)}
-                                                step="10"
-                                                value={posY}
-                                                onChange={(e) => updateCoords('y', e.target.value)}
-                                                className="w-full h-1 bg-slate-800 rounded accent-blue-500 cursor-pointer"
+                                                type="number"
+                                                min="40"
+                                                max="1080"
+                                                value={width}
+                                                onChange={(e) => {
+                                                    const val = Math.max(40, Math.min(1080, parseInt(e.target.value, 10) || 40));
+                                                    const next = { ...watermarkPreset1, width: val, x: Math.min(posX, 1080 - val) };
+                                                    setWatermarkPreset1(next);
+                                                    try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
+                                                }}
+                                                className="w-16 bg-transparent text-blue-400 font-mono font-bold text-xs text-right outline-none"
                                             />
+                                            <span className="text-xs text-slate-400 font-mono">px</span>
                                         </div>
                                     </div>
-                                </div>
 
-                                {/* Width / Scale Slider */}
-                                <div className="space-y-1.5 bg-slate-950 p-3 rounded-2xl border border-slate-800">
-                                    <div className="flex justify-between text-xs">
-                                        <span className="text-slate-400">Scale / Width:</span>
-                                        <span className="text-blue-400 font-mono font-bold">{width}px</span>
-                                    </div>
                                     <input
                                         type="range"
-                                        min="120"
-                                        max="450"
-                                        step="10"
+                                        min="40"
+                                        max="1080"
+                                        step="5"
                                         value={width}
                                         onChange={(e) => {
-                                            const next = { ...watermarkPreset1, width: parseInt(e.target.value, 10) };
+                                            const val = parseInt(e.target.value, 10);
+                                            const next = { ...watermarkPreset1, width: val, x: Math.min(posX, 1080 - val) };
                                             setWatermarkPreset1(next);
                                             try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
                                         }}
-                                        className="w-full h-1.5 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
+                                        className="w-full h-2 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
                                     />
-                                    <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                                        <span>120px (Discreet)</span>
-                                        <span>240px (Default)</span>
-                                        <span>450px (Prominent)</span>
+
+                                    {/* Quick Sizing Buttons */}
+                                    <div className="flex flex-wrap gap-1.5 pt-1">
+                                        {[
+                                            { label: '160px', w: 160 },
+                                            { label: '240px (Default)', w: 240 },
+                                            { label: '360px', w: 360 },
+                                            { label: '500px', w: 500 },
+                                            { label: '750px', w: 750 },
+                                            { label: '1080px (Full)', w: 1080 }
+                                        ].map(sz => (
+                                            <button
+                                                key={sz.label}
+                                                type="button"
+                                                onClick={() => {
+                                                    const next = { ...watermarkPreset1, width: sz.w, x: Math.min(posX, 1080 - sz.w) };
+                                                    setWatermarkPreset1(next);
+                                                    try { localStorage.setItem('watermark_preset_1', JSON.stringify(next)); } catch (err) {}
+                                                }}
+                                                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                                                    width === sz.w
+                                                        ? 'bg-blue-600/30 text-blue-300 border-blue-500'
+                                                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                                                }`}
+                                            >
+                                                {sz.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Precision Numeric Steppers */}
+                                <div className="space-y-2 bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                                    <label className="text-xs font-bold text-slate-300 block">Fine-Tuning Canvas Coordinates (1080×1920)</label>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                                            <div className="flex justify-between text-[11px] text-slate-400 mb-1.5">
+                                                <span>X Offset:</span>
+                                                <span className="font-mono text-blue-400 font-bold">{posX}px</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="0"
+                                                max={Math.max(0, 1080 - width)}
+                                                step="5"
+                                                value={posX}
+                                                onChange={(e) => updateCoords('x', e.target.value)}
+                                                className="w-full h-1.5 bg-slate-800 rounded accent-blue-500 cursor-pointer"
+                                            />
+                                        </div>
+                                        <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                                            <div className="flex justify-between text-[11px] text-slate-400 mb-1.5">
+                                                <span>Y Offset:</span>
+                                                <span className="font-mono text-blue-400 font-bold">{posY}px</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="0"
+                                                max={Math.max(0, 1920 - estH)}
+                                                step="5"
+                                                value={posY}
+                                                onChange={(e) => updateCoords('y', e.target.value)}
+                                                className="w-full h-1.5 bg-slate-800 rounded accent-blue-500 cursor-pointer"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
 
                                 {/* Opacity Slider */}
-                                <div className="space-y-1.5 bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                                <div className="space-y-2 bg-slate-950 p-4 rounded-2xl border border-slate-800">
                                     <div className="flex justify-between text-xs">
-                                        <span className="text-slate-400">Opacity:</span>
+                                        <span className="font-bold text-slate-300">Watermark Opacity:</span>
                                         <span className="text-blue-400 font-mono font-bold">{Math.round(opacity * 100)}%</span>
                                     </div>
                                     <input
@@ -4055,9 +4164,9 @@
                                         className="w-full h-1.5 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
                                     />
                                     <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                                        <span>10% (Subtle)</span>
-                                        <span>65% (Balanced)</span>
-                                        <span>100% (Solid)</span>
+                                        <span>10% (Faint)</span>
+                                        <span>70% (Standard)</span>
+                                        <span>100% (Solid Opaque)</span>
                                     </div>
                                 </div>
                             </div>
@@ -4065,8 +4174,8 @@
 
                         {/* Modal Footer */}
                         <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-                            <span className="text-[11px] text-slate-400">
-                                Saved to local profile • Burns to current & future renders
+                            <span className="text-xs text-slate-400">
+                                ✓ Preset saved to browser memory & automatically burns into all batch renders
                             </span>
                             <button
                                 type="button"
@@ -4074,9 +4183,10 @@
                                     try { localStorage.setItem('watermark_preset_1', JSON.stringify(watermarkPreset1)); } catch (err) {}
                                     onClose();
                                 }}
-                                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-blue-500/25 active:scale-95"
+                                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-blue-500/25 active:scale-95 flex items-center gap-2"
                             >
-                                Save & Apply to Clips
+                                <span>Save & Apply Preset</span>
+                                <span>✓</span>
                             </button>
                         </div>
                     </div>

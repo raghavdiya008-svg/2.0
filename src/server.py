@@ -529,7 +529,25 @@ def _run_render_job(job_data, **kwargs):
     if start is not None and end is not None and (float(end) - float(start)) > 0:
         start_f = float(start)
         end_f = float(end)
-        dur_f = end_f - start_f
+
+        # Automatically snap start/end to speech acoustic/word boundaries to eliminate abrupt cuts
+        all_words = job_data.get("words")
+        if not all_words:
+            base_n = os.path.splitext(video_filename)[0]
+            cached_audio = pipeline._load_audio_cache(video_filename) or pipeline._load_audio_cache(base_n)
+            if cached_audio and "words" in cached_audio:
+                all_words = cached_audio["words"]
+        if all_words:
+            try:
+                from curation_engine import snap_cuts_to_speech_boundaries
+                snapped = snap_cuts_to_speech_boundaries([{"start": start_f, "end": end_f}], words=all_words, tolerance=0.85)
+                if snapped and len(snapped) > 0:
+                    start_f = float(snapped[0]["start"])
+                    end_f = float(snapped[0]["end"])
+            except Exception as e:
+                logger.debug(f"[server] Speech boundary snap fallback: {e}")
+
+        dur_f = max(0.5, end_f - start_f)
         os.makedirs(TEMP_DIR, exist_ok=True)
         slice_temp_file = os.path.join(TEMP_DIR, f"slice_{uuid.uuid4().hex[:8]}.mp4")
         
@@ -1329,7 +1347,7 @@ def api_curate_gemini(req: GeminiCurationRequest):
         f"Return strictly a raw JSON array of objects without markdown formatting or commentary."
     )
 
-    model_to_use = req.model or "gemini-3.5-flash"
+    model_to_use = req.model or "gemini-3.5-flash-lite"
     raw_response = curation_engine._call_gemini_native_api(
         api_key=key,
         model=model_to_use,

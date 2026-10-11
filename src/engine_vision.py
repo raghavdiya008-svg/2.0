@@ -344,10 +344,27 @@ def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
                 if y1 > frame_h * 0.55 or bh < frame_h * 0.20 or bw < 100:
                     continue
 
-                # A merged composite box spanning multiple people sitting side-by-side only occurs
-                # when width spans more than 52% of canvas (>= 1000px on 1080p) AND w/h is significantly wide (>= 1.05).
-                # Normal single-person upper-body shots (even with arms outstretched) must not be split.
-                if bw >= frame_w * 0.52 and (bw / float(bh)) >= 1.05:
+                # Only split a composite bounding box if multiple distinct human faces are verified inside it.
+                # A single person gesturing, leaning on a desk, or holding a microphone must NEVER be bisected.
+                has_multiple_faces = False
+                if bw >= frame_w * 0.55 and (bw / float(bh)) >= 1.35:
+                    try:
+                        sub_crop = frame[max(0, y1):min(frame_h, y2), max(0, x1):min(frame_w, x2)]
+                        if sub_crop.size > 0:
+                            gray_sub = cv2.cvtColor(sub_crop, cv2.COLOR_BGR2GRAY)
+                            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                            if os.path.isfile(cascade_path):
+                                fc = cv2.CascadeClassifier(cascade_path)
+                                f_dets = fc.detectMultiScale(gray_sub, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+                                if len(f_dets) >= 2:
+                                    # Ensure the two detected faces are horizontally separated
+                                    f_centers = [fx + fw / 2.0 for (fx, fy, fw, fh) in f_dets]
+                                    if (max(f_centers) - min(f_centers)) >= bw * 0.25:
+                                        has_multiple_faces = True
+                    except Exception:
+                        has_multiple_faces = False
+
+                if has_multiple_faces:
                     half_w = bw // 2
                     extracted.append((x1, y1, half_w, bh))
                     extracted.append((x1 + half_w, y1, half_w, bh))
@@ -1093,16 +1110,33 @@ def detect_multispeaker_framing(
     if total_frames < 2:
         return None
 
+    # Compute maximum face height across all frames to establish foreground speaker scale
+    all_raw_bh: List[float] = []
+    for boxes in all_frames_boxes:
+        for b in boxes:
+            if isinstance(b, (tuple, list)) and len(b) >= 4:
+                all_raw_bh.append(float(b[3]))
+            elif isinstance(b, dict):
+                all_raw_bh.append(float(b.get("h", b.get("height", 0))))
+    max_speaker_bh = max(all_raw_bh) if all_raw_bh else 0.0
+
+    # Hard face height floor: at least 110px or 12% frame height, AND at least 50% of the dominant speaker
+    # This decisively filters out static background wall art, posters, figurines, and micro-faces
+    min_face_h = max(110, int(source_h * 0.12), int(max_speaker_bh * 0.50))
+    min_face_area = int(min_face_h * min_face_h * 0.65)
+
     left_cluster_centers: List[float] = []
     right_cluster_centers: List[float] = []
     left_cluster_y: List[float] = []
     right_cluster_y: List[float] = []
+    left_cluster_h: List[float] = []
+    right_cluster_h: List[float] = []
     frames_with_left = 0
     frames_with_right = 0
 
     left_bound = source_w * 0.48
     right_bound = source_w * 0.52
-    min_face_separation = source_w * 0.25  # At least 25% horizontal gap between distinct speakers
+    min_face_separation = source_w * 0.22  # At least 22% horizontal gap between distinct speakers
 
     frames_with_both_simultaneous = 0
 
@@ -1122,8 +1156,8 @@ def detect_multispeaker_framing(
             else:
                 continue
 
-            # Filter out tiny noise detections (< 35px or area < 1500px^2)
-            if bw < 35 or bh < 35 or (bw * bh) < 1500:
+            # Filter out tiny noise and background decor detections (< min_face_h or area < min_face_area)
+            if bh < min_face_h or bw < 40 or (bw * bh) < min_face_area:
                 continue
 
             cx = bx + bw / 2.0
@@ -1133,10 +1167,12 @@ def detect_multispeaker_framing(
             if cx < left_bound:
                 left_cluster_centers.append(cx)
                 left_cluster_y.append(cy)
+                left_cluster_h.append(bh)
                 has_left = True
             elif cx > right_bound:
                 right_cluster_centers.append(cx)
                 right_cluster_y.append(cy)
+                right_cluster_h.append(bh)
                 has_right = True
 
         if has_left:
@@ -1147,7 +1183,7 @@ def detect_multispeaker_framing(
         # Strict simultaneous co-presence check:
         # A frame only counts as simultaneous two-shot if:
         # 1) At least one face is on the left AND at least one on the right, AND
-        # 2) The horizontal distance between the extreme centers is at least 25% of source_w!
+        # 2) The horizontal distance between the extreme centers is at least min_face_separation!
         if has_left and has_right and len(frame_box_centers) >= 2:
             if (max(frame_box_centers) - min(frame_box_centers)) >= min_face_separation:
                 frames_with_both_simultaneous += 1
@@ -1162,6 +1198,28 @@ def detect_multispeaker_framing(
     if not left_cluster_centers or not right_cluster_centers:
         return None
 
+    # Face scale parity check: Both speakers in a podcast two-shot must have comparable face size.
+    # If one face is less than 55% the height of the other, the smaller one is background decor / wall art.
+    med_lh = float(statistics.median(left_cluster_h)) if left_cluster_h else 0.0
+    med_rh = float(statistics.median(right_cluster_h)) if right_cluster_h else 0.0
+    if med_lh > 0 and med_rh > 0:
+        size_ratio = min(med_lh, med_rh) / max(med_lh, med_rh)
+        if size_ratio < 0.55:
+            logger.info(f"[engine_vision] Rejecting dual-speaker split: face size mismatch (Left: {med_lh:.0f}px vs Right: {med_rh:.0f}px, ratio {size_ratio:.2f})")
+            return None
+
+    # Static background motion variance check: A real human has head motion/posture shifts.
+    # A painting/poster on the wall has zero variance across static camera frames.
+    if len(left_cluster_centers) >= 3 and len(right_cluster_centers) >= 3:
+        std_lx = statistics.stdev(left_cluster_centers)
+        std_rx = statistics.stdev(right_cluster_centers)
+        if std_lx < 1.2 and med_lh < med_rh:
+            logger.info(f"[engine_vision] Rejecting dual-speaker split: Left cluster has near-zero motion std ({std_lx:.2f}px) - likely background artwork")
+            return None
+        if std_rx < 1.2 and med_rh < med_lh:
+            logger.info(f"[engine_vision] Rejecting dual-speaker split: Right cluster has near-zero motion std ({std_rx:.2f}px) - likely background artwork")
+            return None
+
     median_left = float(statistics.median(left_cluster_centers))
     median_right = float(statistics.median(right_cluster_centers))
 
@@ -1172,17 +1230,16 @@ def detect_multispeaker_framing(
 
     midpoint = (median_left + median_right) / 2.0
 
-    # 3. Calculate Strict Isolated 9:8 Crop Windows (Zero Neighbor Overlap)
-    # The maximum width for each person without crossing the midpoint line
+    # 3. Calculate Clean Isolated 9:8 Crop Windows (Zero Neighbor Overlap)
     max_clean_w = int(min(
         sep * 0.85,
         (midpoint - median_left) * 1.75,
         (median_right - midpoint) * 1.75,
-        source_w * 0.38
+        source_w * 0.40
     ))
-    max_clean_w = max(200, max_clean_w)
+    max_clean_w = max(240, max_clean_w)
 
-    target_h = int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2
+    target_h = int(min(source_h, max(720, int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2)))
     target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
     target_w = max(2, int(target_w // 2) * 2)
     target_h = max(2, int(target_h // 2) * 2)
@@ -1191,6 +1248,11 @@ def detect_multispeaker_framing(
     x_a = int(round(median_left - target_w / 2.0))
     x_a = max(0, min(x_a, int(midpoint - target_w)))
     x_a = int(x_a // 2) * 2
+
+    # Center horizontally on Right Speaker (Speaker B), strictly bound left edge to midpoint
+    x_b = int(round(median_right - target_w / 2.0))
+    x_b = max(int(midpoint), min(x_b, source_w - target_w))
+    x_b = int(x_b // 2) * 2
 
     # Center horizontally on Right Speaker (Speaker B), strictly bound left edge to midpoint
     x_b = int(round(median_right - target_w / 2.0))
