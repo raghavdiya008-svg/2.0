@@ -405,7 +405,10 @@ def download_youtube_video(
             logger.info(f"[media_downloader] Using cookies file: {cookies_path}")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            pre_info = ydl.extract_info(url, download=False)
+            if pre_info and (pre_info.get("is_live") or pre_info.get("live_status") == "is_live"):
+                raise RuntimeError("This YouTube video is currently broadcasting live. Please wait until the live stream finishes before curating clips.")
+            info = ydl.process_ie_result(pre_info, download=True) if pre_info else ydl.extract_info(url, download=True)
             if info:
                 title = info.get("title", title) or title
                 duration = float(info.get("duration", duration) or duration)
@@ -706,6 +709,7 @@ def extract_youtube_transcript_with_timestamps(url: str) -> Optional[List[Dict[s
                     t_ms = e.get("tStartMs", 0)
                     sec = round(t_ms / 1000.0, 2)
                     text = "".join(s.get("utf8", "") for s in e.get("segs", [])).strip()
+                    text = html.unescape(text)
                     # Clean musical notes / emojis
                     text_clean = re.sub(r"[\u266a\u266b\u266c\u2669\u266f#]+", "", text).strip()
                     if text_clean:

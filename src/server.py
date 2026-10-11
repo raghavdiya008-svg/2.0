@@ -486,8 +486,36 @@ def _job_cleanup_callback(job):
             except Exception as e:
                 logger.warning(f"[server] Failed to delete expired file {out_path}: {e}")
 
+def check_and_prune_temp_disk(min_free_gb: float = 2.5):
+    """If free disk space drops below min_free_gb, automatically prunes stale files in TEMP_DIR and older output zips."""
+    try:
+        free_gb = _get_disk_free_gb()
+        if free_gb < min_free_gb:
+            logger.warning(f"[server] Low disk space detected ({free_gb:.2f} GB free < {min_free_gb} GB threshold). Pruning stale temp files...")
+            now = time.time()
+            if os.path.isdir(TEMP_DIR):
+                for f in os.listdir(TEMP_DIR):
+                    fp = os.path.join(TEMP_DIR, f)
+                    if os.path.isfile(fp) and (now - os.path.getmtime(fp)) > 600:
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
+            if os.path.isdir(OUTPUTS_DIR):
+                for f in os.listdir(OUTPUTS_DIR):
+                    if f.endswith(".zip"):
+                        fp = os.path.join(OUTPUTS_DIR, f)
+                        if os.path.isfile(fp) and (now - os.path.getmtime(fp)) > 3600:
+                            try:
+                                os.remove(fp)
+                            except OSError:
+                                pass
+    except Exception as e:
+        logger.debug(f"[server] check_and_prune_temp_disk notice: {e}")
+
 def _run_render_job(job_data, **kwargs):
     """Execution wrapper for rendering jobs. Handles full videos and sliced cuts."""
+    check_and_prune_temp_disk()
     video_name = job_data["video"]
     logo_name = job_data.get("logo")
     video_coords = job_data.get("video_coords") or {
@@ -559,6 +587,7 @@ def _run_render_job(job_data, **kwargs):
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
             *get_cfr_args(),
             "-c:a", "aac",
+            "-ac", "2",
             "-af", "aresample=async=1",
             slice_temp_file
         ]
@@ -665,7 +694,7 @@ def _run_render_job(job_data, **kwargs):
             pass
 
         # 2. Determine Subtitle Safe Placement and Generate ASS
-        margin_v = int(job_data.get("margin_v") or 440)
+        margin_v = max(380, int(job_data.get("margin_v") or 440))
 
         if not job_data.get("ass_path"):
             ass_temp_file = os.path.join(TEMP_DIR, f"subtitles_{uuid.uuid4().hex[:8]}.ass")

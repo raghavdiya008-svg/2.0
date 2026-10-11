@@ -437,9 +437,16 @@ def generate_karaoke_ass(
                     karaoke_parts.append(f"{{\\c{active_tag_color}\\fscx110\\fscy110\\kf{cs_dur}}}{word_text}{{\\fscx100\\fscy100\\c{inactive_tag_color}}} ")
                 else:
                     karaoke_parts.append(f"{{\\c{active_tag_color}\\kf{cs_dur}}}{word_text}{{\\c{inactive_tag_color}}} ")
-                t_cursor = w_end
+            # Dynamic horizontal safe-fit: scale font down if line contains long words to avoid canvas overflow
+            max_w_len = max([len(str(w.get("word", ""))) for w in line_words] + [0])
+            total_chars = sum(len(str(w.get("word", ""))) for w in line_words)
+            font_scale_tag = ""
+            if max_w_len >= 18 or total_chars >= 26:
+                font_scale_tag = "{\\fs68}"
+            elif max_w_len >= 14 or total_chars >= 22:
+                font_scale_tag = "{\\fs78}"
 
-            karaoke_str = "".join(karaoke_parts).rstrip()
+            karaoke_str = font_scale_tag + "".join(karaoke_parts).rstrip()
             line_style = "Default"
             if shot_timeline:
                 for s in shot_timeline:

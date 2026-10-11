@@ -102,9 +102,21 @@
             const [isCurating, setIsCurating] = useState(false);
 
             // Batch Render State
-            const [batchId, setBatchId] = useState('');
+            const [batchId, setBatchId] = useState(() => {
+                try {
+                    return localStorage.getItem('active_batch_id') || '';
+                } catch (e) {
+                    return '';
+                }
+            });
             const [batchStatus, setBatchStatus] = useState(null);
-            const [isRenderingBatch, setIsRenderingBatch] = useState(false);
+            const [isRenderingBatch, setIsRenderingBatch] = useState(() => {
+                try {
+                    return Boolean(localStorage.getItem('active_batch_id'));
+                } catch (e) {
+                    return false;
+                }
+            });
             const [renderSpeed, setRenderSpeed] = useState(1.0);
             const [globalTitleY, setGlobalTitleY] = useState(130);
             const [globalMarginV, setGlobalMarginV] = useState(440);
@@ -727,7 +739,7 @@
             };
 
             const handleStartBatchRender = async () => {
-                if (selectedClipIndices.length === 0) return;
+                if (isRenderingBatch || selectedClipIndices.length === 0) return;
                 const clipsToRender = selectedClipIndices.map(i => curatedClips[i]);
                 setIsRenderingBatch(true);
 
@@ -772,6 +784,9 @@
 
                     const data = await res.json();
                     setBatchId(data.batch_id);
+                    try {
+                        localStorage.setItem('active_batch_id', data.batch_id);
+                    } catch (e) {}
                 } catch (err) {
                     alert(`Batch Render Error: ${err.message}`);
                     setIsRenderingBatch(false);
@@ -1138,6 +1153,9 @@
                                                     <option value={8}>8 Clips</option>
                                                     <option value={10}>10 Clips</option>
                                                     <option value={12}>12 Clips</option>
+                                                    <option value={15}>15 Clips</option>
+                                                    <option value={20}>20 Clips</option>
+                                                    <option value={30}>30 Clips</option>
                                                 </select>
                                                 <button
                                                     type="button"

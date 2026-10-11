@@ -408,14 +408,24 @@ Respond strictly with valid JSON."""
                     "bot_zone": (screencast_zone or wide_zone).to_dict(),
                 })
             elif shot_type == "split_stack" or cam_id == "split":
-                resolved.append({
-                    "start": round(shot["start"], 2),
-                    "end": round(shot["end"], 2),
-                    "type": "split_stack",
-                    "camera": "split",
-                    "top_zone": host_zone.to_dict(),
-                    "bot_zone": guest_zone.to_dict(),
-                })
+                if len(self.config.zones) >= 3 and wide_zone:
+                    # 3+ speakers panel: fall back to wide shot to preserve all participants
+                    resolved.append({
+                        "start": round(shot["start"], 2),
+                        "end": round(shot["end"], 2),
+                        "type": "wide",
+                        "camera": "zone_wide",
+                        "zone": wide_zone.to_dict(),
+                    })
+                else:
+                    resolved.append({
+                        "start": round(shot["start"], 2),
+                        "end": round(shot["end"], 2),
+                        "type": "split_stack",
+                        "camera": "split",
+                        "top_zone": host_zone.to_dict(),
+                        "bot_zone": guest_zone.to_dict(),
+                    })
             elif cam_id == "zone_wide" or shot_type == "wide":
                 resolved.append({
                     "start": round(shot["start"], 2),

@@ -92,8 +92,8 @@ def snap_cuts_to_speech_boundaries(
                     min_e_diff = abs(w_e - e)
                     best_e = w_e
 
-            s = best_s
-            e = max(s + 1.0, best_e)
+            s = max(0.0, best_s - 0.25)  # 250ms lead-in buffer to protect the first consonant/syllable
+            e = max(s + 1.0, best_e + 0.20)  # 200ms trailing buffer to avoid abrupt cutoff on last word
 
         # 2. Snap to nearest acoustic trough / silence gap
         if silence_gaps and audio_intelligence and hasattr(audio_intelligence, "snap_to_acoustic_trough"):

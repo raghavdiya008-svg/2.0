@@ -856,11 +856,13 @@ def build_ffmpeg_command(
 
         # Scale watermark ensuring even dimensions for FFmpeg encoder
         if scale_w > 0:
-            scale_w = max(2, int(scale_w // 2) * 2)
+            scale_w = max(16, int(scale_w // 2) * 2)
         scale_expr = f"scale={scale_w}:-2" if scale_w > 0 else "scale='min(250,iw)':-2"
         op_str = f"{opacity:g}"
+        is_jpg = str(watermark_path).lower().endswith((".jpg", ".jpeg"))
+        extra_key = ",colorkey=white:0.12:0.05" if is_jpg else ""
         filter_complex_parts.append(
-            f"[{watermark_input_idx}:v]{scale_expr},format=rgba,colorchannelmixer=aa={op_str}[wm_semi]"
+            f"[{watermark_input_idx}:v]{scale_expr},format=rgba{extra_key},colorchannelmixer=aa={op_str}[wm_semi]"
         )
         filter_complex_parts.append(
             f"{current_label}[wm_semi]overlay={overlay_x}:{overlay_y}[comp_wm]"
@@ -1034,6 +1036,7 @@ def build_ffmpeg_command(
         "-pix_fmt", "yuv420p",
         "-threads", str(opts.threads),
         "-c:a", "aac",
+        "-ac", "2",
         "-b:a", opts.audio_bitrate,
         "-ar", "48000",
         "-shortest",
