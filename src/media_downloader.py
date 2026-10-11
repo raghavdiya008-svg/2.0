@@ -98,11 +98,11 @@ def _find_cookies_file() -> Optional[str]:
 def _ytdlp_extra_args() -> list:
     """
     Returns extra resilience flags for yt-dlp.
-    Injects multi-client fallback (android, ios, web) to bypass bot-detection on cloud VMs (Kaggle/Colab).
+    Injects multi-client fallback (visionos, web_embedded, default) to bypass bot-detection on cloud VMs (Kaggle/Colab).
     Injects cookies.txt automatically when present.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=android,ios,web,visionos",
+        "--extractor-args", "youtube:player_client=visionos,web_embedded,default",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--no-check-certificates",
         "--retries", "3",
@@ -396,7 +396,7 @@ def download_youtube_video(
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
-            "extractor_args": {"youtube": {"player_client": ["android", "ios", "web", "visionos"]}},
+            "extractor_args": {"youtube": {"player_client": ["visionos", "web_embedded", "default"]}},
             "nocheckcertificate": True,
             "progress_hooks": [_yt_hook],
         }
@@ -446,27 +446,27 @@ def download_youtube_video(
         logger.warning("[media_downloader] yt_dlp not importable — falling back to subprocess.")
     except Exception as e:
         last_error_msg = str(e)
-        logger.warning(f"[media_downloader] yt-dlp primary error ({e}) — attempting android single-stream client fallback.")
+        logger.warning(f"[media_downloader] yt-dlp primary error ({e}) — attempting VisionOS / web_embedded client fallback.")
 
-    # ── Step 3.5: Client fallback (android client with single-stream format) ─
+    # ── Step 3.5: Client fallback (visionos, web_embedded fallback) ─
     if not _downloaded_ok:
         try:
             import yt_dlp  # noqa: PLC0415
-            print("[media_downloader] Retrying with Android client single-stream fallback...")
-            ydl_opts_android = {
+            print("[media_downloader] Retrying with VisionOS / web_embedded client fallback...")
+            ydl_opts_fallback = {
                 "format": "best[ext=mp4]/best",
                 "merge_output_format": "mp4",
                 "outtmpl": safe_filename,
                 "noplaylist": True,
                 "quiet": False,
                 "no_warnings": False,
-                "extractor_args": {"youtube": {"player_client": ["android"]}},
+                "extractor_args": {"youtube": {"player_client": ["visionos", "web_embedded"]}},
                 "nocheckcertificate": True,
             }
             cookies_path = _find_cookies_file()
             if cookies_path:
-                ydl_opts_android["cookiefile"] = cookies_path
-            with yt_dlp.YoutubeDL(ydl_opts_android) as ydl:
+                ydl_opts_fallback["cookiefile"] = cookies_path
+            with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info:
                     title = info.get("title", title) or title
@@ -498,14 +498,14 @@ def download_youtube_video(
 
             if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0:
                 _downloaded_ok = True
-                print(f"[media_downloader] Android client fallback download complete: {safe_filename}")
-        except Exception as android_err:
-            last_error_msg = str(android_err)
-            logger.warning(f"[media_downloader] Android client fallback error: {android_err}")
+                print(f"[media_downloader] VisionOS client fallback download complete: {safe_filename}")
+        except Exception as fb_err:
+            last_error_msg = str(fb_err)
+            logger.warning(f"[media_downloader] VisionOS client fallback error: {fb_err}")
 
-    # ── Step 4: FALLBACK — subprocess with android,ios,web client ────────────
+    # ── Step 4: FALLBACK — subprocess with visionos,web_embedded client ───────
     if not _downloaded_ok:
-        print("[media_downloader] Trying subprocess fallback with multi-client args...")
+        print("[media_downloader] Trying subprocess fallback with VisionOS/Embedded client...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
             "-f", format_spec,
             "--merge-output-format", "mp4",
@@ -516,8 +516,9 @@ def download_youtube_video(
         result = subprocess.run(cmd, capture_output=False)
 
         if result.returncode != 0 or not os.path.isfile(safe_filename):
-            print("[media_downloader] Multi-client subprocess failed — retrying with standard single stream...")
+            print("[media_downloader] VisionOS primary failed — retrying with standard single stream...")
             fallback_cmd = _ytdlp_cmd() + [
+                "--extractor-args", "youtube:player_client=visionos,web_embedded,default",
                 "-f", "best[ext=mp4]/best",
                 "--merge-output-format", "mp4",
                 "-o", safe_filename,
@@ -656,6 +657,8 @@ def extract_youtube_transcript_with_timestamps(url: str) -> Optional[List[Dict[s
             "skip_download": True,
             "quiet": True,
             "no_warnings": True,
+            "extractor_args": {"youtube": {"player_client": ["visionos", "web_embedded", "default"]}},
+            "nocheckcertificate": True,
         }
         cookies = _find_cookies_file()
         if cookies:

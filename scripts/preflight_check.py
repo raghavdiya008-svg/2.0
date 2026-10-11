@@ -76,7 +76,7 @@ try:
     from src import media_downloader
     extra_args = media_downloader._ytdlp_extra_args()
     has_player_client = any("player_client=" in arg for arg in extra_args)
-    report("Downloader: Multi-Client Player Bypass (Android/iOS/Web)", has_player_client, "Configured")
+    report("Downloader: Multi-Client Player Bypass (VisionOS/Embedded)", has_player_client, "Configured")
 except Exception as e:
     report("Media Downloader Import", False, str(e))
 
