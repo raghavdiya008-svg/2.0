@@ -601,7 +601,7 @@ def _run_render_job(job_data, **kwargs):
                     clip_words.append({
                         **w,
                         "start": max(0.0, ws - start_f),
-                        "end": max(0.05, we - start_f)
+                        "end": min(dur_f, max(0.05, we - start_f))
                     })
 
         # CRITICAL FAILSAFE: If words are not available, run lightweight on-the-fly Whisper ASR on the sliced segment
@@ -1377,9 +1377,19 @@ def api_curate_gemini(req: GeminiCurationRequest):
     # Parse JSON
     try:
         clean_json_str = raw_response.strip()
+        clean_json_str = re.sub(r"^```(?:json|JSON)?\s*", "", clean_json_str, flags=re.MULTILINE)
+        clean_json_str = re.sub(r"```\s*$", "", clean_json_str, flags=re.MULTILINE).strip()
+
         match = re.search(r"\[\s*\{[\s\S]*\}\s*\]", clean_json_str)
         if match:
             clean_json_str = match.group(0)
+        else:
+            match_obj = re.search(r"\{\s*[\"']clips[\"']\s*:\s*\[[\s\S]*\]\s*\}", clean_json_str)
+            if match_obj:
+                clean_json_str = match_obj.group(0)
+
+        # Strip trailing commas before closing braces/brackets
+        clean_json_str = re.sub(r",\s*([\]}])", r"\1", clean_json_str)
         parsed = json.loads(clean_json_str)
         if isinstance(parsed, dict) and "clips" in parsed:
             parsed = parsed["clips"]
