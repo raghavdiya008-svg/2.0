@@ -123,6 +123,13 @@
             const [importModalTab, setImportModalTab] = useState('choice'); // 'choice' | 'api' | 'file'
             const [importRawText, setImportRawText] = useState('');
             const [importUrl, setImportUrl] = useState('');
+            const [geminiApiKey, setGeminiApiKey] = useState(() => {
+                try {
+                    return localStorage.getItem('gemini_api_key') || '';
+                } catch (e) {
+                    return '';
+                }
+            });
             const [isFetchingGemini, setIsFetchingGemini] = useState(false);
             const [geminiSuccessMsg, setGeminiSuccessMsg] = useState('');
             const [importAppendMode, setImportAppendMode] = useState(true);
@@ -510,6 +517,7 @@
                             url: url,
                             file_name: selectedVideo,
                             custom_transcript: importRawText,
+                            gemini_api_key: (geminiApiKey || '').trim() || null,
                             target_clips: 6
                         })
                     });
@@ -1053,6 +1061,29 @@
                                                     gemini-3.5-flash
                                                 </span>
                                             </div>
+                                            {/* API Key Configuration input */}
+                                            <div className="space-y-1">
+                                                <div className="flex items-center justify-between text-[11px]">
+                                                    <span className="text-slate-400 font-semibold flex items-center gap-1">
+                                                        <span>🔑</span> Gemini API Key:
+                                                    </span>
+                                                    <span className="text-emerald-400 font-mono text-[10px]">
+                                                        {geminiApiKey ? 'Key Configured' : 'Required'}
+                                                    </span>
+                                                </div>
+                                                <input
+                                                    type="password"
+                                                    value={geminiApiKey}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        setGeminiApiKey(val);
+                                                        try { localStorage.setItem('gemini_api_key', val); } catch (err) {}
+                                                    }}
+                                                    placeholder="AIzaSy... (or leave blank to use server key)"
+                                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 font-mono text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
+                                                />
+                                            </div>
+
                                             <div className="flex items-center gap-2">
                                                 <input
                                                     type="text"
