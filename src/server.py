@@ -553,8 +553,9 @@ def _run_render_job(job_data, **kwargs):
         
         slice_cmd = [
             "ffmpeg", "-y",
-            "-ss", str(start_f), "-t", str(dur_f),
+            "-ss", str(start_f),
             "-i", video_path,
+            "-t", str(dur_f),
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
             *get_cfr_args(),
             "-c:a", "aac",
@@ -1410,9 +1411,37 @@ def api_curate_gemini(req: GeminiCurationRequest):
 
         # Strip trailing commas before closing braces/brackets
         clean_json_str = re.sub(r",\s*([\]}])", r"\1", clean_json_str)
-        parsed = json.loads(clean_json_str)
-        if isinstance(parsed, dict) and "clips" in parsed:
-            parsed = parsed["clips"]
+        try:
+            parsed = json.loads(clean_json_str)
+            if isinstance(parsed, dict) and "clips" in parsed:
+                parsed = parsed["clips"]
+        except Exception as json_err:
+            logger.warning(f"[server] Standard json.loads failed ({json_err}), attempting regex object recovery...")
+            clip_matches = re.findall(r'\{[^{}]*(?:start|start_time)[^{}]*\}', raw_response)
+            recovered = []
+            for cm in clip_matches:
+                try:
+                    clean_cm = re.sub(r",\s*\}", "}", cm)
+                    recovered.append(json.loads(clean_cm))
+                except Exception:
+                    s_m = re.search(r'["\'](?:start|start_time)["\']\s*:\s*([\d.]+)', cm)
+                    e_m = re.search(r'["\'](?:end|end_time)["\']\s*:\s*([\d.]+)', cm)
+                    t_m = re.search(r'["\']title["\']\s*:\s*["\'](.*?)(?:",|"\n|"\s*\})', cm)
+                    h_m = re.search(r'["\']hook_sentence["\']\s*:\s*["\'](.*?)(?:",|"\n|"\s*\})', cm)
+                    v_m = re.search(r'["\']virality_score["\']\s*:\s*(\d+)', cm)
+                    if s_m and e_m:
+                        recovered.append({
+                            "title": t_m.group(1) if t_m else "Viral Clip",
+                            "hook_sentence": h_m.group(1) if h_m else "",
+                            "start": float(s_m.group(1)),
+                            "end": float(e_m.group(1)),
+                            "virality_score": int(v_m.group(1)) if v_m else 85
+                        })
+            if recovered:
+                parsed = recovered
+            else:
+                raise json_err
+
         if not isinstance(parsed, list):
             raise ValueError("Expected JSON array of clips")
     except Exception as e:
