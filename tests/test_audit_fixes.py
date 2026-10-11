@@ -396,7 +396,60 @@ class TestAuditFixes(unittest.TestCase):
         score, tag = compute_visual_hook_score("", 0.0, 10.0)
         self.assertEqual(score, 75.0)
 
+    def test_20_headline_font_personality_styling(self):
+        """Verify headline banner uses high-impact typography styling with bold border, shadow, and Anton font."""
+        font_path = ef.get_system_font_path()
+        self.assertIsNotNone(font_path)
+        self.assertTrue(os.path.isfile(font_path))
+        # Ensure Anton or bold font is picked up
+        self.assertTrue("Anton" in font_path or "Bold" in font_path or "arial" in font_path.lower())
+
+        # Test command builder with headline
+        cmd, _ = ef.build_ffmpeg_command(
+            input_path="dummy.mp4",
+            output_path="out.mp4",
+            video_coords={"x": 0, "y": 0, "width": 1080, "height": 1920},
+            text_coords={"x": 0, "y": 100},
+            headline_text="HOW FREE TIERS FUND BILLIONS"
+        )
+        cmd_str = " ".join(cmd)
+        self.assertIn("drawtext", cmd_str)
+        self.assertIn("borderw=3", cmd_str)
+        self.assertIn("shadowx=4:shadowy=4", cmd_str)
+        self.assertIn("boxcolor=black@0.75", cmd_str)
+
+    def test_21_clip_slug_and_descriptive_file_naming(self):
+        """Verify generate_clip_slug produces clean, filesystem-safe slugs and filenames synced in metadata."""
+        from curation_engine import generate_clip_slug, validate_and_format_cuts
+        
+        # Test slug generator
+        slug = generate_clip_slug("How Free Tiers Fund Billions! (Crazy Secret?)", 784.2, 827.8)
+        self.assertEqual(slug, "How_Free_Tiers_Fund_Billions_Crazy_Secret_clip_784_828")
+
+        # Test length capping
+        long_title = "This is an extremely long title that exceeds the forty-five character limit for filesystem compatibility on Windows"
+        short_slug = generate_clip_slug(long_title, 10, 20)
+        # Title part should not exceed 45 chars
+        title_part = short_slug.replace("_clip_10_20", "")
+        self.assertLessEqual(len(title_part), 45)
+
+        # Test validate_and_format_cuts populates file_slug and output_filename
+        cuts = [{
+            "start": 10.0,
+            "end": 40.0,
+            "hook_sentence": "The Truth About SaaS Pricing",
+            "virality_score": 92
+        }]
+        formatted = validate_and_format_cuts(cuts, 100.0, file_name="podcast_ep1.mp4")
+        self.assertEqual(len(formatted), 1)
+        self.assertIn("file_slug", formatted[0])
+        self.assertIn("output_filename", formatted[0])
+        self.assertEqual(formatted[0]["output_filename"], f"{formatted[0]['file_slug']}.mp4")
+        self.assertTrue(formatted[0]["output_filename"].endswith(".mp4"))
+        self.assertIn("The_Truth_About_SaaS_Pricing", formatted[0]["file_slug"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

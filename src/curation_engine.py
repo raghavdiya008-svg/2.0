@@ -109,16 +109,56 @@ def snap_cuts_to_speech_boundaries(
     return snapped_cuts
 
 
+def generate_clip_slug(hook_sentence: str, start: float, end: float, base_name: str = "") -> str:
+    """
+    Generates a clean, filesystem-safe descriptive slug and filename.
+    Format: [base_name_]Sanitized_Hook_Title_clip_START_END
+    e.g. 'How_Free_Tiers_Fund_Billions_clip_784_827'
+    """
+    import re
+    # Clean text: keep only alphanumeric and spaces
+    clean_text = re.sub(r"[^\w\s-]", "", str(hook_sentence or "").strip())
+    # Convert consecutive whitespaces/hyphens into single underscore
+    slug_words = re.sub(r"[-\s]+", "_", clean_text).strip("_")
+    
+    # Fallback to generic title if empty or only symbols
+    if not slug_words:
+        slug_words = "Viral_Clip"
+        
+    # Cap slug length to 45 chars to respect Windows MAX_PATH limits
+    if len(slug_words) > 45:
+        slug_words = slug_words[:45].rstrip("_")
+
+    s_int = int(round(float(start)))
+    e_int = int(round(float(end)))
+    
+    base_prefix = ""
+    if base_name:
+        clean_base = re.sub(r"[^\w\s-]", "", str(base_name).strip())
+        clean_base = re.sub(r"[-\s]+", "_", clean_base).strip("_")
+        if clean_base:
+            if len(clean_base) > 20:
+                clean_base = clean_base[:20].rstrip("_")
+            base_prefix = f"{clean_base}_"
+
+    return f"{base_prefix}{slug_words}_clip_{s_int}_{e_int}"
+
+
 def validate_and_format_cuts(
     raw_cuts: list,
     total_duration: float,
     min_duration: float = 20.0,
     words: Optional[List[Dict[str, Any]]] = None,
     silence_gaps: Optional[List[Tuple[float, float]]] = None,
+    file_name: str = "",
 ) -> list:
-    """Validates raw cut dictionaries, snaps boundaries to speech/words, and populates unified key aliases."""
+    """Validates raw cut dictionaries, snaps boundaries to speech/words, and populates unified key aliases and descriptive slugs."""
     if words or silence_gaps:
         raw_cuts = snap_cuts_to_speech_boundaries(raw_cuts, words=words, silence_gaps=silence_gaps)
+
+    base_stem = ""
+    if file_name:
+        base_stem = os.path.splitext(os.path.basename(file_name))[0]
 
     validated = []
     for item in raw_cuts:
@@ -140,6 +180,10 @@ def validate_and_format_cuts(
             v_score = max(0, min(100, v_score))
         except (TypeError, ValueError):
             v_score = 85
+
+        slug = item.get("file_slug") or generate_clip_slug(sentence, s, e, base_name=base_stem)
+        out_fn = item.get("output_filename") or f"{slug}.mp4"
+
         validated.append({
             "start":          s,
             "end":            e,
@@ -148,6 +192,8 @@ def validate_and_format_cuts(
             "virality_score": v_score,
             "hook_sentence":  sentence,
             "hook_text":      sentence,
+            "file_slug":       slug,
+            "output_filename": out_fn,
             "reason":         str(item.get("reason", "")),
             "curation_method": str(item.get("curation_method", "llm_curated")),
             "is_fallback":    bool(item.get("is_fallback", False)),
@@ -1183,13 +1229,13 @@ def get_viral_cuts(
 
     # Short clip: return the whole thing
     if total_duration <= 45.0:
-        return [{
+        return validate_and_format_cuts([{
             "start": 0.0, "end": total_duration,
             "start_time": 0.0, "end_time": total_duration,
             "virality_score": 85,
             "hook_sentence": "Full Segment Clip",
             "reason": "Optimal standalone soundbite meeting duration threshold.",
-        }]
+        }], total_duration, file_name=file_name)
 
     # Attempt Cloud Frontier API or local Ollama path when transcript words are available
     if words and len(words) >= 80:
@@ -1250,7 +1296,7 @@ def get_viral_cuts(
                     for c in llm_cuts:
                         c["curation_method"] = "llm_curated"
                         c["is_fallback"] = False
-                    llm_cuts = validate_and_format_cuts(llm_cuts, total_duration, words=words, silence_gaps=silence_gaps)
+                    llm_cuts = validate_and_format_cuts(llm_cuts, total_duration, words=words, silence_gaps=silence_gaps, file_name=file_name)
 
                 logger.info("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")
                 print("[curation] Path: Tri-Modal LLM + Acoustic + Visual scoring.")
@@ -1302,7 +1348,7 @@ def get_viral_cuts(
                 if len(reels) >= target_clips:
                     break
                     
-        return validate_and_format_cuts(reels, total_duration)
+        return validate_and_format_cuts(reels, total_duration, file_name=file_name)
     else:
         # Even-split fallback
         logger.info("[curation] Path: even-split fallback (no LLM / no words).")
@@ -1324,7 +1370,7 @@ def get_viral_cuts(
                 "is_fallback": True,
             })
             
-    return validate_and_format_cuts(reels, total_duration)
+    return validate_and_format_cuts(reels, total_duration, file_name=file_name)
 
 
 def curate_video_with_warning(

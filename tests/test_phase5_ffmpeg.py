@@ -105,7 +105,9 @@ class TestPhase5FFmpegEngine(unittest.TestCase):
         self.assertIn("drawtext=", fc)
         self.assertIn("x=(w-text_w)/2:y=90", fc)
         self.assertIn("fontsize=46:fontcolor=white", fc)
-        self.assertIn("box=1:boxcolor=black@0.65:boxborderw=14", fc)
+        self.assertIn("box=1:boxcolor=black@0.75:boxborderw=18", fc)
+        self.assertIn("borderw=3:bordercolor=black@0.90", fc)
+        self.assertIn("shadowx=4:shadowy=4:shadowcolor=black@0.85", fc)
         self.assertIn("[comp_title]", fc)
 
     def test_05_headline_text_escaping(self):

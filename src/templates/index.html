@@ -490,6 +490,8 @@
                                 virality_score: parseInt(item.virality_score ?? item.score ?? 90, 10),
                                 title: item.title || item.hook_sentence || `Gemini Hook #${idx + 1}`,
                                 hook_sentence: item.title || item.hook_sentence || `Gemini Hook #${idx + 1}`,
+                                file_slug: item.file_slug || null,
+                                output_filename: item.output_filename || null,
                                 reason: item.reason || item.hook_summary || item.virality_reason || 'Curated high-retention moment by Gemini.',
                                 is_gemini_imported: true
                             };
@@ -680,7 +682,9 @@
                             layout: 'director_multizone',
                             shot_timeline: previewShots
                         },
-                        words: words
+                        words: words,
+                        file_slug: previewClip.file_slug,
+                        output_filename: previewClip.output_filename
                     };
                     const res = await fetch('/render', {
                         method: 'POST',

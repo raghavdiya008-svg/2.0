@@ -844,19 +844,24 @@ def build_ffmpeg_command(
             font_esc = os.path.abspath(font_path).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
             font_opt = f"fontfile='{font_esc}':"
 
+        # High-impact typography styling: bold border outline + drop shadow + sleek contrast pill box
+        drawtext_style = (
+            f"x=(w-text_w)/2:y={banner_y}:fontsize={f_size}:fontcolor=white:line_spacing=12:"
+            f"box=1:boxcolor=black@0.75:boxborderw=18:"
+            f"borderw=3:bordercolor=black@0.90:"
+            f"shadowx=4:shadowy=4:shadowcolor=black@0.85:"
+            f"enable='between(t,0,4.5)'"
+        )
+
         if temp_text_file and os.path.isfile(temp_text_file):
             txt_esc = os.path.abspath(temp_text_file).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
             filter_complex_parts.append(
-                f"{current_label}drawtext={font_opt}textfile='{txt_esc}':"
-                f"x=(w-text_w)/2:y={banner_y}:fontsize={f_size}:fontcolor=white:line_spacing=10:"
-                f"box=1:boxcolor=black@0.65:boxborderw=14:enable='between(t,0,4.5)'[comp_title]"
+                f"{current_label}drawtext={font_opt}textfile='{txt_esc}':{drawtext_style}[comp_title]"
             )
         else:
             escaped_title = escape_ffmpeg_drawtext(wrapped_title)
             filter_complex_parts.append(
-                f"{current_label}drawtext={font_opt}text='{escaped_title}':"
-                f"x=(w-text_w)/2:y={banner_y}:fontsize={f_size}:fontcolor=white:line_spacing=10:"
-                f"box=1:boxcolor=black@0.65:boxborderw=14:enable='between(t,0,4.5)'[comp_title]"
+                f"{current_label}drawtext={font_opt}text='{escaped_title}':{drawtext_style}[comp_title]"
             )
         current_label = "[comp_title]"
 

@@ -315,6 +315,8 @@ class RenderRequest(BaseModel):
     title_y: Optional[int] = None
     delete_title: bool = False
     presentation_mode: bool = False
+    file_slug: Optional[str] = None
+    output_filename: Optional[str] = None
 
     @field_validator('aspect_ratio')
     @classmethod
@@ -587,7 +589,20 @@ def _run_render_job(job_data, **kwargs):
                 logger.warning(f"[server] clip_words is empty — no subtitles for clip {start_f}-{end_f}")
                 ass_temp_file = None
 
-        output_filename = f"{base}_clip_{int(start_f)}_{int(end_f)}_{uuid.uuid4().hex[:4]}.mp4"
+        custom_out = job_data.get("output_filename")
+        if custom_out and str(custom_out).strip():
+            clean_out = "".join(c for c in str(custom_out).strip() if c.isalnum() or c in "._-")
+            if not clean_out.lower().endswith(".mp4"):
+                clean_out += ".mp4"
+            output_filename = clean_out
+        elif job_data.get("file_slug") and str(job_data.get("file_slug")).strip():
+            slug_clean = "".join(c for c in str(job_data["file_slug"]).strip() if c.isalnum() or c in "._-")
+            output_filename = f"{slug_clean}.mp4"
+        elif hook_sentence and str(hook_sentence).strip():
+            clean_slug = curation_engine.generate_clip_slug(str(hook_sentence).strip(), start_f, end_f, base_name=base)
+            output_filename = f"{clean_slug}.mp4"
+        else:
+            output_filename = f"{base}_clip_{int(start_f)}_{int(end_f)}_{uuid.uuid4().hex[:4]}.mp4"
     else:
         output_filename = f"{base}_rebranded.mp4"
 
@@ -1172,6 +1187,8 @@ def api_render_batch(req: BatchRenderRequest):
                 "brand_logo_path": _resolve_logo_path(req.brand_logo),
                 "watermark_logo_path": _resolve_logo_path(req.watermark_logo),
                 "words": cached_words,
+                "file_slug": clip.get("file_slug"),
+                "output_filename": clip.get("output_filename"),
             }
             render_queue_manager.submit_job(
                 _run_render_job,
@@ -1520,6 +1537,8 @@ def render(req: RenderRequest):
         "title_y": req.title_y,
         "delete_title": req.delete_title,
         "presentation_mode": req.presentation_mode,
+        "file_slug": req.file_slug,
+        "output_filename": req.output_filename,
     }
 
     render_queue_manager.submit_job(

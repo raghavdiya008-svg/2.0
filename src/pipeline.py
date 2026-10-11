@@ -586,7 +586,18 @@ def run_pipeline(
 
             active_slice_path = slice_paths[idx]
             trajectory = trajectories.get(idx, [])
-            out_path = os.path.join(output_dir, f"reel_{idx}_input_raw.mp4")
+            hook_txt = cut.get("hook_sentence", "")
+            base_in = os.path.splitext(os.path.basename(original_input_path))[0]
+            if cut.get("output_filename"):
+                out_name = cut["output_filename"]
+            elif cut.get("file_slug"):
+                out_name = f"{cut['file_slug']}.mp4"
+            elif hook_txt:
+                slug = curation_engine.generate_clip_slug(hook_txt, start, end, base_name=f"reel_{idx}")
+                out_name = f"{slug}.mp4"
+            else:
+                out_name = f"reel_{idx}_{base_in}.mp4"
+            out_path = os.path.join(output_dir, out_name)
 
             slice_words = []
             if words:
@@ -695,6 +706,8 @@ def run_pipeline(
                 "virality_score":  cut.get("virality_score", 85),
                 "reason":          cut.get("reason", ""),
                 "hook_sentence":   cut.get("hook_sentence", ""),
+                "file_slug":       cut.get("file_slug") or os.path.splitext(out_name)[0],
+                "output_filename": out_name,
                 "path":            out_path,
                 "speaker_segments": clip_speakers,
             })
