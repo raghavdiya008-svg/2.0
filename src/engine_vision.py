@@ -1571,13 +1571,19 @@ def calculate_tracking_trajectory(
     has_any_blur_box_shot = False
     has_any_split_shot = False
     has_any_single_shot = False
+    n_shot_intervals = len(shot_intervals)
 
-    for s_start, s_end in shot_intervals:
-        # Collect frame detections and speaker turns in this specific shot
+    for _si_idx, (s_start, s_end) in enumerate(shot_intervals):
+        is_last_shot = (_si_idx == n_shot_intervals - 1)
+        # Collect frame detections strictly within this shot interval.
+        # Use strict upper bound (fd[0] < s_end) to prevent wide-shot face detections
+        # at the scene-cut boundary from bleeding into an adjacent solo close-up interval.
+        # For the very last shot, include frames exactly at s_end so no sample is dropped.
         shot_frame_dets = [
-            fd for fd in all_frame_detections if s_start <= fd[0] <= s_end
+            fd for fd in all_frame_detections
+            if s_start <= fd[0] < s_end or (is_last_shot and fd[0] == s_end)
         ]
-        
+
         # Sample 5 evenly distributed frames across this shot interval for face count evaluation
         sample_counts = []
         if shot_frame_dets:
@@ -1609,12 +1615,18 @@ def calculate_tracking_trajectory(
                 if spk_e > spk_s:
                     shot_speaker_turns.append({"speaker": spk_seg["speaker"], "start": spk_s, "end": spk_e})
 
-        shot_multi = detect_multispeaker_framing(
-            frame_detections=shot_frame_dets,
-            speaker_turns=shot_speaker_turns,
-            source_w=source_w,
-            source_h=source_h,
-        )
+        # Only attempt dual-speaker split-stack detection when this shot interval
+        # genuinely has >= 2 faces.  Calling detect_multispeaker_framing on a solo
+        # close-up (median_faces <= 1) risks promoting a single-person shot to
+        # split_stack when the diarization contains 2 speakers from a different interval.
+        shot_multi = None
+        if median_faces >= 2:
+            shot_multi = detect_multispeaker_framing(
+                frame_detections=shot_frame_dets,
+                speaker_turns=shot_speaker_turns,
+                source_w=source_w,
+                source_h=source_h,
+            )
 
         if shot_multi is not None and "dual_speaker_layout" in shot_multi:
             dsl = shot_multi["dual_speaker_layout"]
@@ -1649,56 +1661,95 @@ def calculate_tracking_trajectory(
             left_centers = [cx for cx in shot_centers if cx < source_w * 0.48]
             right_centers = [cx for cx in shot_centers if cx > source_w * 0.52]
 
-            host_crop_x = int(round(statistics.median(left_centers) - target_crop_w / 2.0)) if left_centers else 0
-            guest_crop_x = int(round(statistics.median(right_centers) - target_crop_w / 2.0)) if right_centers else (source_w - target_crop_w)
-            host_crop_x = max(0, min(host_crop_x, source_w - target_crop_w))
-            guest_crop_x = max(0, min(guest_crop_x, source_w - target_crop_w))
+            # If both left and right speakers are simultaneously visible across this 2-shot:
+            # Squeezing both people sitting 550px+ apart into a single 9:16 portrait crop (608px wide)
+            # bisects their faces and cuts off their shoulders.
+            # Using split_stack (Host top 9:8, Guest bottom 9:8) ensures both conversationalists
+            # are 100% visible, fully framed from chest to head, and perfectly centered!
+            if left_centers and right_centers and len(left_centers) >= 2 and len(right_centers) >= 2:
+                has_any_split_shot = True
+                med_l = float(statistics.median(left_centers))
+                med_r = float(statistics.median(right_centers))
+                midpoint = source_w / 2.0
+                max_clean_w = max(200, min(midpoint * 0.95, (midpoint - med_l) * 1.75, (med_r - midpoint) * 1.75, source_w * 0.38))
+                t_h = max(2, int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2)
+                t_w = max(2, int(round(t_h * 9.0 / 8.0 / 2.0)) * 2)
+                x_a = max(0, min(int(round(med_l - t_w / 2.0)), int(midpoint - t_w)))
+                x_b = max(int(midpoint), min(int(round(med_r - t_w / 2.0)), source_w - t_w))
+                y_a = max(0, min(source_h - t_h, int(source_h * 0.20)))
+                y_b = max(0, min(source_h - t_h, int(source_h * 0.20)))
 
-            # Multi-person scene: Partition into distinct shots if camera pans between distinct speakers
-            shot_offsets_with_ts = [
-                (ts, raw_x_offsets[k]) for k, ts in enumerate(sample_timestamps)
-                if s_start <= ts <= s_end
-            ]
-            if not shot_offsets_with_ts:
-                shot_offsets_with_ts = [(s_start, center_x)]
+                shot_timeline.append({
+                    "start": round(s_start, 2),
+                    "end": round(s_end, 2),
+                    "type": "split_stack",
+                    "camera": "podcast_split",
+                    "top_zone": {
+                        "id": "zone_top", "label": "Host",
+                        "x": int(x_a // 2) * 2, "y": int(y_a // 2) * 2, "width": t_w, "height": t_h
+                    },
+                    "bot_zone": {
+                        "id": "zone_bot", "label": "Guest",
+                        "x": int(x_b // 2) * 2, "y": int(y_b // 2) * 2, "width": t_w, "height": t_h
+                    }
+                })
+            else:
+                host_crop_x = int(round(statistics.median(left_centers) - target_crop_w / 2.0)) if left_centers else 0
+                guest_crop_x = int(round(statistics.median(right_centers) - target_crop_w / 2.0)) if right_centers else (source_w - target_crop_w)
+                host_crop_x = max(0, min(host_crop_x, source_w - target_crop_w))
+                guest_crop_x = max(0, min(guest_crop_x, source_w - target_crop_w))
 
-            sub_cuts = []
-            cur_cluster = [shot_offsets_with_ts[0][1]]
-            cur_start_ts = shot_offsets_with_ts[0][0]
+                # Multi-person scene: Partition into distinct shots if camera pans between distinct speakers
+                shot_offsets_with_ts = [
+                    (ts, raw_x_offsets[k]) for k, ts in enumerate(sample_timestamps)
+                    if s_start <= ts <= s_end
+                ]
+                if not shot_offsets_with_ts:
+                    shot_offsets_with_ts = [(s_start, center_x)]
 
-            for ts_val, x_val in shot_offsets_with_ts[1:]:
-                med_cluster = statistics.median(cur_cluster)
-                if abs(x_val - med_cluster) >= (target_crop_w * 0.35) and (ts_val - cur_start_ts) >= MIN_SHOT_DUR:
-                    sub_cuts.append((cur_start_ts, ts_val, int(round(med_cluster))))
-                    cur_cluster = [x_val]
-                    cur_start_ts = ts_val
-                else:
-                    cur_cluster.append(x_val)
-            sub_cuts.append((cur_start_ts, s_end, int(round(statistics.median(cur_cluster)))))
+                sub_cuts = []
+                cur_cluster = [shot_offsets_with_ts[0][1]]
+                cur_start_ts = shot_offsets_with_ts[0][0]
 
-            for sub_s, sub_e, sub_x in sub_cuts:
-                if (sub_e - sub_s) >= 0.5:
-                    has_any_single_shot = True
-                    # Discretely snap to host or guest if both clusters exist to prevent bisecting either speaker
-                    if left_centers and right_centers:
-                        dist_to_host = abs(sub_x - host_crop_x)
-                        dist_to_guest = abs(sub_x - guest_crop_x)
-                        clamped_x = host_crop_x if dist_to_host <= dist_to_guest else guest_crop_x
-                        speaker_lbl = "Host" if dist_to_host <= dist_to_guest else "Guest"
+                for ts_val, x_val in shot_offsets_with_ts[1:]:
+                    med_cluster = statistics.median(cur_cluster)
+                    if abs(x_val - med_cluster) >= (target_crop_w * 0.35) and (ts_val - cur_start_ts) >= MIN_SHOT_DUR:
+                        sub_cuts.append((cur_start_ts, ts_val, int(round(med_cluster))))
+                        cur_cluster = [x_val]
+                        cur_start_ts = ts_val
                     else:
-                        clamped_x = max(0, min(sub_x, source_w - target_crop_w))
-                        speaker_lbl = "Active Speaker"
+                        cur_cluster.append(x_val)
+                sub_cuts.append((cur_start_ts, s_end, int(round(statistics.median(cur_cluster)))))
 
-                    shot_timeline.append({
-                        "start": round(sub_s, 2),
-                        "end": round(sub_e, 2),
-                        "type": "single",
-                        "camera": "solo",
-                        "zone": {
-                            "id": "zone_solo", "label": speaker_lbl,
-                            "x": clamped_x, "y": 0, "width": target_crop_w, "height": source_h
-                        },
-                    })
+                for sub_s, sub_e, sub_x in sub_cuts:
+                    if (sub_e - sub_s) >= 0.5:
+                        has_any_single_shot = True
+                        # Discretely snap to host or guest if both clusters exist to prevent bisecting either speaker
+                        if left_centers and right_centers:
+                            dist_to_host = abs(sub_x - host_crop_x)
+                            dist_to_guest = abs(sub_x - guest_crop_x)
+                            clamped_x = host_crop_x if dist_to_host <= dist_to_guest else guest_crop_x
+                            speaker_lbl = "Host" if dist_to_host <= dist_to_guest else "Guest"
+                        elif left_centers:
+                            clamped_x = host_crop_x
+                            speaker_lbl = "Host"
+                        elif right_centers:
+                            clamped_x = guest_crop_x
+                            speaker_lbl = "Guest"
+                        else:
+                            clamped_x = max(0, min(sub_x, source_w - target_crop_w))
+                            speaker_lbl = "Active Speaker"
+
+                        shot_timeline.append({
+                            "start": round(sub_s, 2),
+                            "end": round(sub_e, 2),
+                            "type": "single",
+                            "camera": "solo",
+                            "zone": {
+                                "id": "zone_solo", "label": speaker_lbl,
+                                "x": clamped_x, "y": 0, "width": target_crop_w, "height": source_h
+                            },
+                        })
         elif median_faces >= 3 and len([cx for cx in shot_centers if source_w * 0.35 <= cx <= source_w * 0.65]) >= 2:
             # 3+ person panel discussion: Track active focal speaker across shot to avoid excluding middle speaker
             has_any_single_shot = True
@@ -1751,14 +1802,22 @@ def calculate_tracking_trajectory(
 
     # If the slice has multiple shots or contains non-single layouts (blur_box or split_stack):
     if (len(shot_intervals) > 1 or has_any_blur_box_shot or has_any_split_shot) and shot_timeline:
-        # Merge adjacent identical shots
+        # Merge adjacent truly identical shots
         merged_timeline: List[Dict[str, Any]] = []
         for s in shot_timeline:
-            if (
-                merged_timeline
-                and merged_timeline[-1]["type"] == s["type"]
-                and merged_timeline[-1].get("camera") == s.get("camera")
-            ):
+            prev = merged_timeline[-1] if merged_timeline else None
+            is_same = False
+            if prev and prev["type"] == s["type"] and prev.get("camera") == s.get("camera"):
+                if s["type"] in ("blur_box", "split_stack"):
+                    is_same = True
+                elif s["type"] == "single":
+                    prev_z = prev.get("zone", {})
+                    curr_z = s.get("zone", {})
+                    # Only merge if crop coordinate is virtually identical (same speaker)
+                    if abs(prev_z.get("x", 0) - curr_z.get("x", 0)) < 60 and prev_z.get("label") == curr_z.get("label"):
+                        is_same = True
+
+            if is_same:
                 merged_timeline[-1]["end"] = s["end"]
             else:
                 merged_timeline.append(s)

@@ -367,12 +367,12 @@ def generate_karaoke_ass(
             except (TypeError, ValueError):
                 natural_end = line_start + 0.5
 
-            # Hold caption across natural breath pauses (up to 0.75s) until next line begins to prevent caption dropouts
+            # Hold caption across natural conversational pauses (up to 1.25s) until next line begins to prevent caption dropouts
             line_end = natural_end
             if idx_line + 1 < len(lines) and lines[idx_line + 1]:
                 try:
                     next_start = float(lines[idx_line + 1][0].get("start") or 0.0)
-                    if next_start > natural_end and (next_start - natural_end) <= 0.75:
+                    if next_start > natural_end and (next_start - natural_end) <= 1.25:
                         bridged = next_start
                         if shot_cut_boundaries:
                             cuts_in_between = [c for c in shot_cut_boundaries if natural_end < c <= next_start]
