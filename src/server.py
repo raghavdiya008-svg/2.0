@@ -262,32 +262,86 @@ def resolve_input_video_path(filename: Optional[str]) -> Optional[str]:
 def _resolve_logo_path(logo_input: Optional[str]) -> Optional[str]:
     """
     Safely resolves a logo filename or relative path strictly within LOGO_DIR.
+    Handles filenames with spaces (e.g. 'DC PNG.png'), URL-encoded names, and sanitized names.
     Rejects path traversals and arbitrary system files.
     """
     if not logo_input or not str(logo_input).strip():
         return None
     raw = str(logo_input).strip()
-    safe_base = secure_filename(os.path.basename(raw))
-    resolved = os.path.abspath(os.path.join(LOGO_DIR, safe_base))
-    if os.path.commonpath([resolved, os.path.abspath(LOGO_DIR)]) != os.path.abspath(LOGO_DIR):
-        logger.warning(f"[server] Path traversal attempt in logo parameter rejected: {logo_input}")
-        return None
-    return resolved if os.path.isfile(resolved) else None
+    import urllib.parse
+    raw_unquoted = urllib.parse.unquote(raw)
+    
+    candidates = [
+        os.path.basename(raw),
+        os.path.basename(raw_unquoted),
+        secure_filename(os.path.basename(raw)),
+        secure_filename(os.path.basename(raw_unquoted))
+    ]
+    
+    for cand in candidates:
+        if not cand:
+            continue
+        resolved = os.path.abspath(os.path.join(LOGO_DIR, cand))
+        if os.path.commonpath([resolved, os.path.abspath(LOGO_DIR)]) == os.path.abspath(LOGO_DIR):
+            if os.path.isfile(resolved):
+                return resolved
+
+    # Fuzzy search inside LOGO_DIR
+    try:
+        if os.path.isdir(LOGO_DIR):
+            target_norm = os.path.basename(raw_unquoted).lower().replace(" ", "").replace("_", "")
+            for f in os.listdir(LOGO_DIR):
+                f_norm = f.lower().replace(" ", "").replace("_", "")
+                if f_norm == target_norm:
+                    resolved = os.path.join(LOGO_DIR, f)
+                    if os.path.isfile(resolved):
+                        return resolved
+    except Exception:
+        pass
+
+    return None
 
 def _resolve_bgm_path(bgm_input: Optional[str]) -> Optional[str]:
     """
     Safely resolves a BGM audio filename or relative path strictly within BGM_DIR.
+    Handles filenames with spaces, URL-encoded names, and sanitized names.
     Rejects path traversals and arbitrary system files.
     """
     if not bgm_input or not str(bgm_input).strip():
         return None
     raw = str(bgm_input).strip()
-    safe_base = secure_filename(os.path.basename(raw))
-    resolved = os.path.abspath(os.path.join(BGM_DIR, safe_base))
-    if os.path.commonpath([resolved, os.path.abspath(BGM_DIR)]) != os.path.abspath(BGM_DIR):
-        logger.warning(f"[server] Path traversal attempt in BGM parameter rejected: {bgm_input}")
-        return None
-    return resolved if os.path.isfile(resolved) else None
+    import urllib.parse
+    raw_unquoted = urllib.parse.unquote(raw)
+    
+    candidates = [
+        os.path.basename(raw),
+        os.path.basename(raw_unquoted),
+        secure_filename(os.path.basename(raw)),
+        secure_filename(os.path.basename(raw_unquoted))
+    ]
+    
+    for cand in candidates:
+        if not cand:
+            continue
+        resolved = os.path.abspath(os.path.join(BGM_DIR, cand))
+        if os.path.commonpath([resolved, os.path.abspath(BGM_DIR)]) == os.path.abspath(BGM_DIR):
+            if os.path.isfile(resolved):
+                return resolved
+
+    # Fuzzy search inside BGM_DIR
+    try:
+        if os.path.isdir(BGM_DIR):
+            target_norm = os.path.basename(raw_unquoted).lower().replace(" ", "").replace("_", "")
+            for f in os.listdir(BGM_DIR):
+                f_norm = f.lower().replace(" ", "").replace("_", "")
+                if f_norm == target_norm:
+                    resolved = os.path.join(BGM_DIR, f)
+                    if os.path.isfile(resolved):
+                        return resolved
+    except Exception:
+        pass
+
+    return None
 
 # ---------------------------------------------------------------------------
 # Pydantic Request Models
@@ -1654,11 +1708,15 @@ def serve_emoji_asset(filename: str):
         return FileResponse(fpath, media_type="image/png")
     raise HTTPException(status_code=404, detail="Emoji file not found")
 
-@app.get("/assets/logos/{filename}")
-@app.get("/logo/{filename}")
+@app.get("/assets/logo/{filename:path}")
+@app.get("/assets/logos/{filename:path}")
+@app.get("/logo/{filename:path}")
 def serve_logo_asset(filename: str):
-    fpath = os.path.join(LOGO_DIR, filename)
-    if os.path.isfile(fpath):
+    fpath = _resolve_logo_path(filename)
+    if not fpath:
+        import urllib.parse
+        fpath = _resolve_logo_path(urllib.parse.unquote(filename))
+    if fpath and os.path.isfile(fpath):
         return FileResponse(fpath)
     raise HTTPException(status_code=404, detail="Logo file not found")
 

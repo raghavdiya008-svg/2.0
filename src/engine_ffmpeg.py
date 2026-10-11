@@ -835,7 +835,10 @@ def build_ffmpeg_command(
 
             # Check position / snap presets
             preset_pos = wm_coords.get("position")
-            if preset_pos == "top_right":
+            if preset_pos == "custom" and wm_coords.get("x") is not None and wm_coords.get("y") is not None:
+                overlay_x = str(int(round(float(wm_coords["x"]))))
+                overlay_y = str(int(round(float(wm_coords["y"]))))
+            elif preset_pos == "top_right":
                 overlay_x, overlay_y = "W-w-30", "30"
             elif preset_pos == "top_left":
                 overlay_x, overlay_y = "30", "30"
