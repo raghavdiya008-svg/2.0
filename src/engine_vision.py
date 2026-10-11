@@ -1122,8 +1122,10 @@ def detect_multispeaker_framing(
             else:
                 continue
 
-            # Filter out tiny noise detections (< 35px or area < 1500px^2)
-            if bw < 35 or bh < 35 or (bw * bh) < 1500:
+            # Filter out tiny noise detections, graphics, stickers (< 12% frame height or < 4% width)
+            min_face_h = max(70, int(source_h * 0.12))
+            min_face_w = max(60, int(source_w * 0.04))
+            if bw < min_face_w or bh < min_face_h or (bw * bh) < (min_face_w * min_face_h):
                 continue
 
             cx = bx + bw / 2.0
@@ -1633,15 +1635,31 @@ def calculate_tracking_trajectory(
         median_faces = int(round(statistics.median(sample_counts))) if sample_counts else 1
 
         shot_centers = []
+        shot_points = []
+        min_real_face_h = max(70, int(source_h * 0.12))
+        min_real_face_w = max(60, int(source_w * 0.04))
+
         for item in shot_frame_dets:
             if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[1], list):
                 for b in item[1]:
                     if isinstance(b, (tuple, list)) and len(b) >= 4:
-                        shot_centers.append(b[0] + b[2] / 2.0)
-                    elif isinstance(b, dict) and "center" in b:
-                        shot_centers.append(b["center"][0])
+                        bx, by, bw, bh = b[:4]
+                        if bh >= min_real_face_h and bw >= min_real_face_w:
+                            cx = bx + bw / 2.0
+                            cy = by + bh / 2.0
+                            shot_centers.append(cx)
+                            shot_points.append((cx, cy))
+                    elif isinstance(b, dict):
+                        bh = b.get("h", b.get("height", 0))
+                        bw = b.get("w", b.get("width", 0))
+                        if bh >= min_real_face_h and bw >= min_real_face_w:
+                            cx = b.get("x", 0) + bw / 2.0
+                            cy = b.get("y", 0) + bh / 2.0
+                            shot_centers.append(cx)
+                            shot_points.append((cx, cy))
             elif isinstance(item, dict) and "center" in item:
                 shot_centers.append(item["center"][0])
+                shot_points.append((item["center"][0], item["center"][1]))
 
         shot_speaker_turns = []
         if speaker_segments:
@@ -1694,26 +1712,27 @@ def calculate_tracking_trajectory(
                 "camera": "graphic_slide",
             })
         elif median_faces >= 2:
-            left_centers = [cx for cx in shot_centers if cx < source_w * 0.48]
-            right_centers = [cx for cx in shot_centers if cx > source_w * 0.52]
+            left_points = [(cx, cy) for (cx, cy) in shot_points if cx < source_w * 0.48]
+            right_points = [(cx, cy) for (cx, cy) in shot_points if cx > source_w * 0.52]
 
-            # If both left and right speakers are simultaneously visible across this 2-shot:
-            # Squeezing both people sitting 550px+ apart into a single 9:16 portrait crop (608px wide)
-            # bisects their faces and cuts off their shoulders.
-            # Using split_stack (Host top 9:8, Guest bottom 9:8) ensures both conversationalists
-            # are 100% visible, fully framed from chest to head, and perfectly centered!
-            if left_centers and right_centers and len(left_centers) >= 2 and len(right_centers) >= 2:
+            # Require confirmed human subjects on both sides (at least 3 sample points each)
+            if left_points and right_points and len(left_points) >= 3 and len(right_points) >= 3:
                 has_any_split_shot = True
-                med_l = float(statistics.median(left_centers))
-                med_r = float(statistics.median(right_centers))
+                med_l = float(statistics.median([p[0] for p in left_points]))
+                med_r = float(statistics.median([p[0] for p in right_points]))
+                med_ly = float(statistics.median([p[1] for p in left_points]))
+                med_ry = float(statistics.median([p[1] for p in right_points]))
+
                 midpoint = source_w / 2.0
                 max_clean_w = max(200, min(midpoint * 0.95, (midpoint - med_l) * 1.75, (med_r - midpoint) * 1.75, source_w * 0.38))
                 t_h = max(2, int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2)
                 t_w = max(2, int(round(t_h * 9.0 / 8.0 / 2.0)) * 2)
                 x_a = max(0, min(int(round(med_l - t_w / 2.0)), int(midpoint - t_w)))
                 x_b = max(int(midpoint), min(int(round(med_r - t_w / 2.0)), source_w - t_w))
-                y_a = max(0, min(source_h - t_h, int(source_h * 0.20)))
-                y_b = max(0, min(source_h - t_h, int(source_h * 0.20)))
+                
+                # Center vertically on detected anatomical eye/nose position with 35% headroom
+                y_a = max(0, min(source_h - t_h, int(med_ly - t_h * 0.35)))
+                y_b = max(0, min(source_h - t_h, int(med_ry - t_h * 0.35)))
 
                 shot_timeline.append({
                     "start": round(s_start, 2),

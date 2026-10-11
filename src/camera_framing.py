@@ -259,8 +259,8 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         except Exception as e:
             logger.debug(f"[camera_framing] Haar detection error: {e}")
 
-    # Filter out tiny spurious detections (less than 8% frame height)
-    min_h = int(sh * 0.08)
+    # Filter out tiny spurious detections (less than 12% frame height)
+    min_h = max(70, int(sh * 0.12))
     valid_faces = [f for f in all_face_dets if f.box[3] >= min_h]
 
     # Cluster detections into Left (Host) and Right (Guest)
@@ -276,7 +276,7 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         elif cx > right_bound:
             right_faces.append(f)
 
-    if left_faces and right_faces:
+    if len(left_faces) >= 2 and len(right_faces) >= 2:
         def _get_coords(f: Any) -> Tuple[float, float, float, float]:
             bx, by, bw, bh = f.box
             if getattr(f, "landmark_center", None) is not None:

@@ -431,6 +431,7 @@ class BatchRenderRequest(BaseModel):
     title_y: Optional[int] = 130
     margin_v: Optional[int] = None
     presentation_mode: bool = False
+    layout_mode: Optional[str] = "single"
 
 class GeminiCurationRequest(BaseModel):
     url: Optional[str] = None
@@ -661,6 +662,8 @@ def _run_render_job(job_data, **kwargs):
 
         # 1. Resolve Camera Framing / TV Director Trajectory UNCONDITIONALLY
         traj = job_data.get("trajectory") or {}
+        layout_mode = job_data.get("layout_mode", "single")
+
         if job_data.get("presentation_mode"):
             traj = {"layout": "blur_box", "no_crop_scale_fit": True}
         elif not traj.get("shot_timeline") and job_data.get("shot_timeline"):
@@ -674,8 +677,8 @@ def _run_render_job(job_data, **kwargs):
                 logger.warning(f"[server] engine_vision trajectory calculation failed: {e}")
                 traj = {}
 
-            # If user explicitly requested director_multizone, or vision detected dual speakers, consult saved TV Director config
-            if (job_data.get("layout") == "director_multizone" or traj.get("is_dual_speaker")) and not traj.get("shot_timeline"):
+            # Only consult TV Director for split_stack if layout_mode is explicitly 'split_stack' or 'auto'
+            if (layout_mode in ("split_stack", "auto")) and (job_data.get("layout") == "director_multizone" or traj.get("is_dual_speaker")) and not traj.get("shot_timeline"):
                 saved_cfg = camera_framing.CameraFramingConfig.load(video_filename) or camera_framing.CameraFramingConfig.load(base)
                 if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
                     try:
@@ -685,6 +688,34 @@ def _run_render_job(job_data, **kwargs):
                             traj = {"layout": "director_multizone", "shot_timeline": shots}
                     except Exception as e:
                         logger.warning(f"[server] Auto TV director fallback: {e}")
+
+        # CRITICAL FAILSAFE: If user chose "single" layout (default), guarantee NO split_stack is ever rendered!
+        if layout_mode == "single" and traj.get("shot_timeline"):
+            cleaned_timeline = []
+            for s in traj["shot_timeline"]:
+                if s.get("type") == "split_stack":
+                    chosen = s.get("bot_zone") or s.get("top_zone") or {}
+                    src_h = traj.get("source_h", 1080)
+                    target_w = max(2, int(round(src_h * 9.0 / 16.0 / 2.0)) * 2)
+                    s_clean = {
+                        "start": s.get("start", 0.0),
+                        "end": s.get("end", dur_f),
+                        "type": "single",
+                        "camera": chosen.get("id", "zone_host"),
+                        "zone": {
+                            "id": chosen.get("id", "zone_host"),
+                            "label": chosen.get("label", "Active Speaker"),
+                            "x": chosen.get("x", 0),
+                            "y": 0,
+                            "width": target_w,
+                            "height": src_h
+                        }
+                    }
+                    cleaned_timeline.append(s_clean)
+                else:
+                    cleaned_timeline.append(s)
+            traj["shot_timeline"] = cleaned_timeline
+            traj["is_dual_speaker"] = False
         job_data["trajectory"] = traj
         try:
             import torch
@@ -1651,6 +1682,7 @@ def api_render_batch(req: BatchRenderRequest):
                 "margin_v": clip.get("margin_v", getattr(req, "margin_v", None)),
                 "delete_title": bool(clip.get("delete_title", False)),
                 "presentation_mode": bool(clip.get("presentation_mode", getattr(req, "presentation_mode", False))),
+                "layout_mode": getattr(req, "layout_mode", "single") or clip.get("layout_mode", "single"),
                 "brand_logo_path": _resolve_logo_path(req.brand_logo),
                 "watermark_logo_path": _resolve_logo_path(req.watermark_logo),
                 "watermark_coords": req.watermark_coords or clip.get("watermark_coords"),

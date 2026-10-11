@@ -118,6 +118,7 @@
                 }
             });
             const [renderSpeed, setRenderSpeed] = useState(1.0);
+            const [layoutMode, setLayoutMode] = useState('single'); // 'single' | 'split_stack'
             const [globalTitleY, setGlobalTitleY] = useState(130);
             const [globalMarginV, setGlobalMarginV] = useState(440);
 
@@ -780,6 +781,7 @@
                             file_name: videoFileToRender,
                             clips: clipsToRender,
                             speed: renderSpeed || 1.0,
+                            layout_mode: layoutMode || 'single',
                             watermark_logo: watermarkPreset1?.enabled ? watermarkPreset1.file : (selectedLogo || null),
                             watermark_coords: watermarkPreset1?.enabled ? watermarkPreset1 : null,
                             brand_logo: selectedLogo || null,
@@ -1042,6 +1044,8 @@
                                 yieldMessage={yieldMessage}
                                 renderSpeed={renderSpeed}
                                 setRenderSpeed={setRenderSpeed}
+                                layoutMode={layoutMode}
+                                setLayoutMode={setLayoutMode}
                                 handleStartBatchRender={handleStartBatchRender}
                                 isRenderingBatch={isRenderingBatch}
                                 batchStatus={batchStatus}
@@ -1381,6 +1385,7 @@
             selectTopN, selectHighVirality,
             targetClipsCount, lowYieldWarning, yieldMessage,
             renderSpeed, setRenderSpeed,
+            layoutMode, setLayoutMode,
             handleStartBatchRender, isRenderingBatch, batchStatus, batchId,
             depsStatus, onCheckDeps, onInstallDeps, isInstallingDeps,
             onOpenDirectorPreview, onOpenImportModal,
@@ -1935,6 +1940,20 @@
                                             <option value={1.10}>1.10x (Fast)</option>
                                             <option value={1.12}>1.12x (High)</option>
                                             <option value={1.15}>1.15x (Ultra)</option>
+                                        </select>
+                                    </div>
+
+                                    {/* Layout Mode Selector */}
+                                    <div className="flex items-center gap-1.5 text-xs bg-slate-950/80 border border-slate-800 px-2.5 py-1 rounded-xl">
+                                        <span className="text-slate-400">Layout:</span>
+                                        <select
+                                            value={layoutMode || 'single'}
+                                            onChange={(e) => setLayoutMode(e.target.value)}
+                                            className="bg-transparent text-white font-mono text-xs focus:outline-none cursor-pointer"
+                                            title="Choose between single active speaker 9:16 portrait tracking or dual split-screen 9:8 stack"
+                                        >
+                                            <option value="single" className="bg-slate-900">👤 Single 9:16 (Active Speaker)</option>
+                                            <option value="split_stack" className="bg-slate-900">👥 Dual Split (9:8 Stack)</option>
                                         </select>
                                     </div>
 
