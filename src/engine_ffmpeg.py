@@ -849,12 +849,13 @@ def build_ffmpeg_command(
                 overlay_x = str(int(round(float(wm_coords["x"]))))
                 overlay_y = str(int(round(float(wm_coords["y"]))))
         else:
-            scale_w = 250
+            scale_w = -1
 
         # Scale watermark
         scale_expr = f"scale={scale_w}:-1" if scale_w > 0 else "scale='min(250,iw)':-1"
+        op_str = f"{opacity:g}"
         filter_complex_parts.append(
-            f"[{watermark_input_idx}:v]{scale_expr},format=rgba,colorchannelmixer=aa={opacity:.2f}[wm_semi]"
+            f"[{watermark_input_idx}:v]{scale_expr},format=rgba,colorchannelmixer=aa={op_str}[wm_semi]"
         )
         filter_complex_parts.append(
             f"{current_label}[wm_semi]overlay={overlay_x}:{overlay_y}[comp_wm]"
@@ -1053,6 +1054,7 @@ def render_clip(
     trajectory: Optional[dict] = None,
     timeout: Optional[float] = 600.0,
     headline_text: Optional[str] = None,
+    brand_logo_path: Optional[str] = None,
     watermark_logo_path: Optional[str] = None,
     watermark_coords: Optional[dict] = None,
     bgm_path: Optional[str] = None,
