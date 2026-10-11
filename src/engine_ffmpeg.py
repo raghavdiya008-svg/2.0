@@ -803,9 +803,33 @@ def build_ffmpeg_command(
         wrapped_title = wrap_headline_text(str(headline).strip(), max_chars_per_line=32)
         line_count = len(wrapped_title.split("\n"))
         f_size = 42 if line_count > 1 else 46
+        banner_y = 90
+
+        # Dynamic headroom adjustment from trajectory analysis:
+        # If speaker's head extends high into frame, shift banner up and slightly scale font
+        if trajectory and isinstance(trajectory, dict):
+            if "headline_y" in trajectory:
+                banner_y = int(trajectory["headline_y"])
+            if trajectory.get("headline_fontsize") is not None:
+                f_size = int(trajectory["headline_fontsize"])
 
         temp_dir = os.path.join(_PROJECT_ROOT, "temp")
         os.makedirs(temp_dir, exist_ok=True)
+
+        # Proactively purge stale headline files older than 5 minutes to avoid temp folder bloat
+        try:
+            now_ts = time.time()
+            for old_h in os.listdir(temp_dir):
+                if old_h.startswith("headline_") and old_h.endswith(".txt"):
+                    old_path = os.path.join(temp_dir, old_h)
+                    if (now_ts - os.path.getmtime(old_path)) > 300:
+                        try:
+                            os.remove(old_path)
+                        except OSError:
+                            pass
+        except Exception:
+            pass
+
         temp_text_file = os.path.join(temp_dir, f"headline_{uuid.uuid4().hex[:8]}.txt")
         try:
             with open(temp_text_file, "w", encoding="utf-8") as f:
@@ -824,14 +848,14 @@ def build_ffmpeg_command(
             txt_esc = os.path.abspath(temp_text_file).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\\\''")
             filter_complex_parts.append(
                 f"{current_label}drawtext={font_opt}textfile='{txt_esc}':"
-                f"x=(w-text_w)/2:y=90:fontsize={f_size}:fontcolor=white:line_spacing=10:"
+                f"x=(w-text_w)/2:y={banner_y}:fontsize={f_size}:fontcolor=white:line_spacing=10:"
                 f"box=1:boxcolor=black@0.65:boxborderw=14:enable='between(t,0,4.5)'[comp_title]"
             )
         else:
             escaped_title = escape_ffmpeg_drawtext(wrapped_title)
             filter_complex_parts.append(
                 f"{current_label}drawtext={font_opt}text='{escaped_title}':"
-                f"x=(w-text_w)/2:y=90:fontsize={f_size}:fontcolor=white:line_spacing=10:"
+                f"x=(w-text_w)/2:y={banner_y}:fontsize={f_size}:fontcolor=white:line_spacing=10:"
                 f"box=1:boxcolor=black@0.65:boxborderw=14:enable='between(t,0,4.5)'[comp_title]"
             )
         current_label = "[comp_title]"

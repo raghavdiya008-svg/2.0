@@ -1350,7 +1350,13 @@ def api_cleanup_temp():
     if os.path.isdir(TEMP_DIR):
         for f in os.listdir(TEMP_DIR):
             fpath = os.path.join(TEMP_DIR, f)
-            if os.path.isfile(fpath) and (f.startswith("slice_") or f.startswith("subtitles_") or f.endswith(".wav") or f.endswith(".ass")):
+            if os.path.isfile(fpath) and (
+                f.startswith("slice_")
+                or f.startswith("subtitles_")
+                or f.startswith("headline_")
+                or f.endswith(".wav")
+                or f.endswith(".ass")
+            ):
                 try:
                     os.remove(fpath)
                     purged_count += 1

@@ -1510,6 +1510,31 @@ def calculate_tracking_trajectory(
             "scene_cuts": clean_cuts,
         }
 
+    # Calculate headroom for initial hook headline banner (displayed during t in [0, 4.5]s)
+    early_boxes = [
+        b for fd in all_frame_detections
+        if fd[0] <= 4.5
+        for b in (fd[1] if isinstance(fd[1], list) else [fd[1]])
+    ]
+    min_early_top_y = None
+    for b in early_boxes:
+        if isinstance(b, (tuple, list)) and len(b) >= 4:
+            top_val = b[1]
+        elif isinstance(b, dict) and "y" in b:
+            top_val = b["y"]
+        else:
+            continue
+        if min_early_top_y is None or top_val < min_early_top_y:
+            min_early_top_y = top_val
+
+    # If face is high in frame (< 22% from top of source_h, e.g. < 240px on 1080p source),
+    # position headline banner at y=48 with 38px font size to prevent overlapping hair.
+    headline_y = 90
+    headline_fsize = None
+    if min_early_top_y is not None and source_h > 0 and (min_early_top_y / float(source_h)) < 0.22:
+        headline_y = 48
+        headline_fsize = 38
+
     # =========================================================================
     # Shot-Aware Dynamic Framing:
     # Segment the slice by scene cuts and determine layout for EACH shot:
@@ -1777,17 +1802,32 @@ def calculate_tracking_trajectory(
                 },
             })
         else:
-            # Solo shot: Find dominant face center in this shot (SmoothGlide centered)
+            # Solo shot or B-roll graphic:
             has_any_single_shot = True
-            shot_offsets = [
-                raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
-                if s_start <= ts <= s_end
-            ]
-            if shot_offsets:
-                shot_x = int(round(statistics.median(shot_offsets)))
-            else:
+
+            # Detect high-frequency cut zones (rapid montage sequences):
+            # If a temporal window has high cut density (>= 4 cuts in a 10s window, or >= 0.35 cuts/sec),
+            # lock crop to frame center (center_x) so rapid graphic cuts don't cause camera jitter.
+            win_s = max(0.0, s_start - 3.0)
+            win_e = min(clip_total_dur, s_end + 3.0)
+            cuts_in_win = [c for c in clean_cuts if win_s <= c <= win_e]
+            win_dur = max(1.0, win_e - win_s)
+            is_rapid_montage = len(cuts_in_win) >= 4 and (len(cuts_in_win) / win_dur) >= 0.35
+
+            if is_rapid_montage:
                 shot_x = center_x
-            shot_x = max(0, min(shot_x, source_w - target_crop_w))
+                speaker_lbl = "Montage Center"
+            else:
+                shot_offsets = [
+                    raw_x_offsets[k] for k, ts in enumerate(sample_timestamps)
+                    if s_start <= ts <= s_end
+                ]
+                if shot_offsets:
+                    shot_x = int(round(statistics.median(shot_offsets)))
+                else:
+                    shot_x = center_x
+                shot_x = max(0, min(shot_x, source_w - target_crop_w))
+                speaker_lbl = "Solo"
 
             shot_timeline.append({
                 "start": round(s_start, 2),
@@ -1795,7 +1835,7 @@ def calculate_tracking_trajectory(
                 "type": "single",
                 "camera": "solo",
                 "zone": {
-                    "id": "zone_solo", "label": "Solo",
+                    "id": "zone_solo", "label": speaker_lbl,
                     "x": shot_x, "y": 0, "width": target_crop_w, "height": source_h
                 },
             })
@@ -1851,6 +1891,8 @@ def calculate_tracking_trajectory(
                 "best_x_offset": center_x,
                 "zoom_keyframes": [],
                 "scene_cuts": clean_cuts,
+                "headline_y": headline_y,
+                "headline_fontsize": headline_fsize,
             }
 
         # Dynamic multi-shot timeline (e.g., solo close-ups and wide blur_box shots)
@@ -1870,6 +1912,8 @@ def calculate_tracking_trajectory(
             "target_crop_w": target_crop_w,
             "zoom_keyframes": [],
             "scene_cuts": clean_cuts,
+            "headline_y": headline_y,
+            "headline_fontsize": headline_fsize,
         }
 
     # Apply exponential smoothing with scene transition boundary hard-resets
@@ -1932,4 +1976,6 @@ def calculate_tracking_trajectory(
         "target_crop_w": target_crop_w,
         "zoom_keyframes": zoom_kfs,
         "scene_cuts": clean_cuts,
+        "headline_y": headline_y,
+        "headline_fontsize": headline_fsize,
     }

@@ -191,12 +191,15 @@ def _ass_header(
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         # Bold  Italic Underline StrikeOut ScaleX ScaleY Spacing Angle
         f"-1,0,0,0,100,100,{spc},0,"
-        # BorderStyle Outline Shadow Alignment MarginL MarginR MarginV Encoding
         f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1\n"
         f"Style: SplitCenter,{safe_font},{font_size},"
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         f"-1,0,0,0,100,100,{spc},0,"
         f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},940,1\n"
+        f"Style: SlideSub,{safe_font},{font_size},"
+        f"{primary_color},{secondary_color},{outline_color},{back_color},"
+        f"-1,0,0,0,100,100,{spc},0,"
+        f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},390,1\n"
     )
     return (
         "[Script Info]\n"
@@ -431,9 +434,13 @@ def generate_karaoke_ass(
                     if s_st <= line_start <= s_en:
                         if s.get("type") == "split_stack":
                             line_style = "SplitCenter"
+                        elif s.get("type") == "blur_box":
+                            line_style = "SlideSub"
                         break
             elif kwargs.get("is_split_stack"):
                 line_style = "SplitCenter"
+            elif kwargs.get("layout") == "blur_box" or kwargs.get("is_blur_box"):
+                line_style = "SlideSub"
 
             f.write(
                 f"Dialogue: 0,{start_str},{end_str},{line_style},,0,0,0,,{karaoke_str}\n"

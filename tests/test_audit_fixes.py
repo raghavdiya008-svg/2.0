@@ -16,6 +16,7 @@ import os
 import sys
 import math
 import unittest
+import tempfile
 
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if SRC_DIR not in sys.path:
@@ -295,6 +296,49 @@ class TestAuditFixes(unittest.TestCase):
         self.assertTrue(os.path.isfile(cached))
         self.assertIn("Billionaire", cached)
 
+    def test_19_visual_polish_headroom_slidesub_cleanup(self):
+        """Verify dynamic headroom banner_y, SlideSub margin for presentation slides, and temp cleanup."""
+        # 1. SlideSub ASS header and line_style assignment
+        header = cap._ass_header()
+        self.assertIn("Style: SlideSub", header)
+        self.assertIn(",390,1", header)
+
+        timeline = [{"start": 0.0, "end": 10.0, "type": "blur_box"}]
+        words = [{"word": "SlideStep", "start": 1.0, "end": 1.5}]
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
+            temp_ass = f.name
+        try:
+            res = cap.generate_karaoke_ass(words, temp_ass, shot_timeline=timeline)
+            self.assertIsNotNone(res)
+            with open(temp_ass, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("SlideSub", content)
+        finally:
+            if os.path.isfile(temp_ass):
+                os.remove(temp_ass)
+
+        # 2. Dynamic headroom banner_y and fontsize override in build_ffmpeg_command
+        traj_tight_headroom = {"headline_y": 48, "headline_fontsize": 38}
+        cmd, tf = ef.build_ffmpeg_command(
+            input_path="inputs/dummy.mp4",
+            output_path="temp/dummy.mp4",
+            video_coords={},
+            text_coords={},
+            headline_text="FASTEST 100M COMPANY",
+            trajectory=traj_tight_headroom,
+        )
+        fc = [cmd[i+1] for i, arg in enumerate(cmd) if arg == "-filter_complex"][0]
+        self.assertIn("x=(w-text_w)/2:y=48", fc)
+        self.assertIn("fontsize=38", fc)
+        if tf and os.path.exists(tf):
+            os.remove(tf)
+
+        # 3. Server temp cleanup purges headline files
+        from server import api_cleanup_temp
+        res_clean = api_cleanup_temp()
+        self.assertEqual(res_clean.get("status"), "success")
+
 
 if __name__ == "__main__":
     unittest.main()
+
