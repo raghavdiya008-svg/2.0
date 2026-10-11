@@ -917,7 +917,10 @@ def _do_ingest(req: IngestRequest, pid: str) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="Unsupported remote URL. Only YouTube and Google Drive URLs are supported.")
         _log_progress(pid, f"Fetching media from remote URL: {stripped_url}", stage="ingestion", progress_pct=20)
         try:
-            media_result = media_downloader.download_media(stripped_url, output_dir=INPUTS_DIR)
+            def _on_dl_progress(msg: str, pct: int):
+                _log_progress(pid, msg, stage="ingestion", progress_pct=pct)
+
+            media_result = media_downloader.download_media(stripped_url, output_dir=INPUTS_DIR, progress_callback=_on_dl_progress)
             target_path = media_result["file_path"] if isinstance(media_result, dict) else media_result
             _log_progress(pid, f"Download complete: {os.path.basename(target_path)}", stage="ingestion", progress_pct=40)
         except Exception as e:

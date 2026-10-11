@@ -288,7 +288,11 @@ def _find_cached_video(output_dir: str, title: Optional[str] = None, v_id: Optio
     return None
 
 
-def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, Any]:
+def download_youtube_video(
+    url: str,
+    output_dir: str = INPUTS_DIR,
+    progress_callback: Optional[Any] = None
+) -> Dict[str, Any]:
     """
     Downloads a YouTube video using the yt-dlp Python API (primary) with subprocess fallback.
 
@@ -346,6 +350,35 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
 
     print(f"[media_downloader] Downloading YouTube video: {url}")
 
+    # Helper for yt-dlp download progress hooks
+    def _yt_hook(d):
+        if not progress_callback:
+            return
+        status = d.get("status")
+        if status == "downloading":
+            total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
+            downloaded = d.get("downloaded_bytes", 0)
+            frag_index = d.get("fragment_index")
+            frag_count = d.get("fragment_count")
+
+            pct = 0.0
+            if total_bytes and total_bytes > 0:
+                pct = (downloaded / total_bytes) * 100.0
+            elif frag_count and frag_count > 0 and frag_index is not None:
+                pct = (frag_index / frag_count) * 100.0
+
+            speed = d.get("speed")
+            speed_str = f"{speed / (1024*1024):.1f} MB/s" if speed else ""
+            eta = d.get("eta")
+            eta_str = f"ETA {eta}s" if eta else ""
+            info_line = f"Downloading: {pct:.1f}% ({speed_str} {eta_str})".strip()
+            
+            # Map download percent into 20% -> 40% overall progress range
+            scaled_pct = 20 + int(pct * 0.20)
+            progress_callback(info_line, scaled_pct)
+        elif status == "finished":
+            progress_callback("Download stream finished. Merging video and audio tracks...", 40)
+
     # ── Step 3: PRIMARY — yt-dlp Python API with resilient player clients ────
     _downloaded_ok = False
     last_error_msg = ""
@@ -365,6 +398,7 @@ def download_youtube_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, 
             "no_warnings": False,
             "extractor_args": {"youtube": {"player_client": ["android", "ios", "web", "visionos"]}},
             "nocheckcertificate": True,
+            "progress_hooks": [_yt_hook],
         }
         if cookies_path:
             ydl_opts["cookiefile"] = cookies_path
@@ -545,14 +579,18 @@ def download_gdrive_video(url: str, output_dir: str = INPUTS_DIR) -> Dict[str, A
     }
 
 
-def download_media(url_or_path: str, output_dir: str = INPUTS_DIR) -> Dict[str, Any]:
+def download_media(
+    url_or_path: str,
+    output_dir: str = INPUTS_DIR,
+    progress_callback: Optional[Any] = None
+) -> Dict[str, Any]:
     """
     Main ingestion resolver. Handles YouTube URLs, GDrive URLs, or local filenames.
     """
     stripped = url_or_path.strip()
 
     if is_youtube_url(stripped):
-        return download_youtube_video(stripped, output_dir=output_dir)
+        return download_youtube_video(stripped, output_dir=output_dir, progress_callback=progress_callback)
     elif is_gdrive_url(stripped):
         return download_gdrive_video(stripped, output_dir=output_dir)
     elif stripped.startswith("http://") or stripped.startswith("https://"):
