@@ -734,7 +734,7 @@ def _call_gemini_native_api(
 
     # Model fallbacks: prefer fast, available flash models
     candidate_models = [model]
-    for fallback in ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-latest"]:
+    for fallback in ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]:
         if fallback not in candidate_models:
             candidate_models.append(fallback)
 

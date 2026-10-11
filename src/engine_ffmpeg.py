@@ -854,8 +854,10 @@ def build_ffmpeg_command(
         else:
             scale_w = -1
 
-        # Scale watermark
-        scale_expr = f"scale={scale_w}:-1" if scale_w > 0 else "scale='min(250,iw)':-1"
+        # Scale watermark ensuring even dimensions for FFmpeg encoder
+        if scale_w > 0:
+            scale_w = max(2, int(scale_w // 2) * 2)
+        scale_expr = f"scale={scale_w}:-2" if scale_w > 0 else "scale='min(250,iw)':-2"
         op_str = f"{opacity:g}"
         filter_complex_parts.append(
             f"[{watermark_input_idx}:v]{scale_expr},format=rgba,colorchannelmixer=aa={op_str}[wm_semi]"

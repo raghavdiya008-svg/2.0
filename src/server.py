@@ -1284,10 +1284,22 @@ def api_curate_gemini(req: GeminiCurationRequest):
             formatted_transcript = "\n".join(f"[{int(item['seconds'])}s | {item['time_str']}] {item['text']}" for item in lines)
             total_duration = lines[-1]["seconds"] if lines else 300.0
         else:
-            # Fallback to local audio cache if already ingested
-            logger.info("[server] Direct YouTube caption scrape unavailable, checking local cache...")
-    elif req.file_name:
-        resolved = resolve_input_video_path(req.file_name)
+            logger.info("[server] Direct YouTube caption scrape unavailable, falling back to local file / cache...")
+
+    # Fallback to local video transcript if URL scrape was unavailable or not provided
+    target_file = req.file_name
+    if not formatted_transcript and not target_file:
+        # Check latest video in INPUTS_DIR
+        try:
+            files = [f for f in os.listdir(INPUTS_DIR) if f.lower().endswith(('.mp4', '.mkv', '.mov'))]
+            if files:
+                files.sort(key=lambda fn: os.path.getmtime(os.path.join(INPUTS_DIR, fn)), reverse=True)
+                target_file = files[0]
+        except Exception:
+            pass
+
+    if not formatted_transcript and target_file:
+        resolved = resolve_input_video_path(target_file)
         if resolved and os.path.isfile(resolved):
             video_title = os.path.splitext(os.path.basename(resolved))[0]
             # Try loading cached transcript
@@ -1296,7 +1308,7 @@ def api_curate_gemini(req: GeminiCurationRequest):
                 import audio_intelligence
                 audio_intelligence.extract_audio(resolved, temp_wav)
                 md5 = pipeline.compute_audio_stream_md5(temp_wav)
-                cached = pipeline._load_audio_cache(md5)
+                cached = pipeline._load_audio_cache(md5) or pipeline._load_audio_cache(target_file) or pipeline._load_audio_cache(video_title)
                 if cached and cached.get("words"):
                     w_list = cached["words"]
                     total_duration = float(w_list[-1].get("end", 0.0)) if w_list else 120.0
@@ -1473,7 +1485,7 @@ def api_render_batch(req: BatchRenderRequest):
                 "start": clip.get("start", clip.get("start_time", 0.0)),
                 "end": clip.get("end", clip.get("end_time", 30.0)),
                 "hook_sentence": clip.get("hook_sentence", clip.get("title", "")),
-                "headline_text": clip.get("hook_sentence", clip.get("title", "")),
+                "headline_text": clip.get("title") or clip.get("hook_sentence", ""),
                 "virality_score": clip.get("virality_score", 85),
                 "speed": req.speed,
                 "speed_factor": req.speed,
