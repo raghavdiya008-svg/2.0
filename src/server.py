@@ -1345,8 +1345,18 @@ def api_curate_gemini(req: GeminiCurationRequest):
     # 2. Check custom user-pasted transcript
     if req.custom_transcript and req.custom_transcript.strip():
         formatted_transcript = req.custom_transcript.strip()
-        if total_duration <= 0:
-            total_duration = 1800.0  # estimate 30m if custom text without duration
+        max_ts = 0.0
+        for m in re.finditer(r"\[(\d+)s", formatted_transcript):
+            max_ts = max(max_ts, float(m.group(1)))
+        for m in re.finditer(r"\[(?:(\d+):)?(\d+):(\d+)\]", formatted_transcript):
+            h = int(m.group(1)) if m.group(1) else 0
+            minute = int(m.group(2))
+            sec = int(m.group(3))
+            max_ts = max(max_ts, float(h * 3600 + minute * 60 + sec))
+        if max_ts > 0:
+            total_duration = max(total_duration, max_ts + 60.0)
+        elif total_duration <= 0:
+            total_duration = 3600.0  # default 1 hour if custom text without timestamps
 
     if not formatted_transcript:
         raise HTTPException(
@@ -1497,6 +1507,13 @@ def api_curate_gemini(req: GeminiCurationRequest):
         clean_candidates.append(item)
     if clean_candidates:
         parsed = clean_candidates
+
+    # Ensure total_duration covers the highest clip endpoint
+    for item in parsed:
+        if isinstance(item, dict):
+            e_val = float(item.get("end", item.get("end_time", 0.0)))
+            if e_val > total_duration:
+                total_duration = e_val + 30.0
 
     # Validate, generate clean file slugs and output filenames
     formatted_cuts = curation_engine.validate_and_format_cuts(
