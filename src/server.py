@@ -668,6 +668,25 @@ def _run_render_job(job_data, **kwargs):
 
         if not job_data.get("ass_path"):
             ass_temp_file = os.path.join(TEMP_DIR, f"subtitles_{uuid.uuid4().hex[:8]}.ass")
+            if not clip_words and active_input_path and os.path.isfile(active_input_path):
+                # Automatic fast speech alignment fallback on sliced clip if words are missing from cache
+                try:
+                    logger.info(f"[server] clip_words empty: Running fast speech alignment on sliced audio...")
+                    import audio_intelligence
+                    clip_wav = os.path.join(TEMP_DIR, f"slice_audio_{uuid.uuid4().hex[:8]}.wav")
+                    audio_intelligence.extract_audio(active_input_path, clip_wav)
+                    extracted_words = audio_intelligence.run_whisper_fallback_local(clip_wav)
+                    if extracted_words:
+                        clip_words = extracted_words
+                        logger.info(f"[server] Fast speech alignment extracted {len(clip_words)} words for sliced clip.")
+                    if os.path.isfile(clip_wav):
+                        try:
+                            os.remove(clip_wav)
+                        except OSError:
+                            pass
+                except Exception as e:
+                    logger.warning(f"[server] Fast speech alignment fallback failed: {e}")
+
             if clip_words:
                 try:
                     import caption_engine
@@ -1345,7 +1364,8 @@ def api_curate_gemini(req: GeminiCurationRequest):
         "3. Diversity: Extract clips from DIFFERENT parts of the episode (beginning, middle, and end). Never cluster clips in only one small section.\n"
         "4. Standalone Hook: The clip must start with a compelling question, shocking claim, or strong emotional hook—never mid-sentence.\n"
         "5. Complete Story Arc: The clip must conclude with a satisfying punchline, lesson, or revelation.\n"
-        "6. No Overlap: Clips must not overlap in timestamps.\n\n"
+        "6. No Overlap: Clips must not overlap in timestamps.\n"
+        "7. Strict Anti-Sponsor & Anti-Intro Filter: NEVER select podcast channel intro montages/teasers, sponsor reads, advertisements, host housekeeping, Patreon/merch promotions, or calls to 'like and subscribe'. Discard any segment containing promo codes, sponsor names, or ad reads.\n\n"
         "You MUST return a JSON array of objects with EXACTLY these keys:\n"
         "  - 'title': Short punchy headline (Max 6 words)\n"
         "  - 'hook_sentence': Exact opening sentence spoken by the speaker\n"
@@ -1429,6 +1449,26 @@ def api_curate_gemini(req: GeminiCurationRequest):
                 if "end_time" in item:
                     item["end_time"] = item["end"]
 
+    # Filter out sponsor reads, ads, and intro promotional segments
+    SPONSOR_TRIGGERS = [
+        "sponsored by", "sponsor", "promo code", "use code", "our sponsor",
+        "link in the description", "head to /", "discount with code",
+        "patreon.com", "buy our merch", "subscribe to the channel",
+        "subscribe to the podcast", "ring the bell", "today's sponsor",
+        "brought to you by", "support for this episode comes from"
+    ]
+    clean_candidates = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        text_check = f"{item.get('title', '')} {item.get('hook_sentence', '')} {item.get('reason', '')}".lower()
+        if any(trig in text_check for trig in SPONSOR_TRIGGERS):
+            logger.info(f"[server] Filtered out sponsor/ad segment from LLM cuts: {item.get('title', '')}")
+            continue
+        clean_candidates.append(item)
+    if clean_candidates:
+        parsed = clean_candidates
+
     # Validate, generate clean file slugs and output filenames
     formatted_cuts = curation_engine.validate_and_format_cuts(
         parsed,
@@ -1440,6 +1480,7 @@ def api_curate_gemini(req: GeminiCurationRequest):
         "status": "ok",
         "model": model_to_use,
         "total_clips": len(formatted_cuts),
+        "target_clips": target_count,
         "clips": formatted_cuts,
         "raw_json": formatted_cuts
     }

@@ -132,6 +132,7 @@
             });
             const [isFetchingGemini, setIsFetchingGemini] = useState(false);
             const [geminiSuccessMsg, setGeminiSuccessMsg] = useState('');
+            const [geminiClipCount, setGeminiClipCount] = useState(6);
             const [importAppendMode, setImportAppendMode] = useState(true);
             const [importError, setImportError] = useState('');
 
@@ -527,7 +528,7 @@
                             file_name: selectedVideo,
                             custom_transcript: importRawText,
                             gemini_api_key: (geminiApiKey || '').trim() || null,
-                            target_clips: 6
+                            target_clips: geminiClipCount || 6
                         })
                     });
                     const responseText = await res.text();
@@ -556,6 +557,7 @@
                             });
                         });
                         setSelectedClipIndices(data.clips.map((_, i) => i));
+                        setTargetClipsCount(data.target_clips || data.total_clips || geminiClipCount || 6);
                         setImportRawText(JSON.stringify(data.clips, null, 2));
                         setGeminiSuccessMsg(`Gemini AI successfully curated ${data.clips.length} viral clips! Loaded into gallery.`);
                     } else {
@@ -1101,7 +1103,7 @@
                                                         <span>🔑</span> Gemini API Key:
                                                     </span>
                                                     <span className="text-emerald-400 font-mono text-[10px]">
-                                                        {geminiApiKey ? 'Key Configured' : 'Required'}
+                                                        {geminiApiKey ? 'Custom Key' : 'Default (Server Key)'}
                                                     </span>
                                                 </div>
                                                 <input
@@ -1125,6 +1127,18 @@
                                                     placeholder="https://www.youtube.com/watch?v=..."
                                                     className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                                                 />
+                                                <select
+                                                    value={geminiClipCount}
+                                                    onChange={(e) => setGeminiClipCount(parseInt(e.target.value) || 6)}
+                                                    className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                                                    title="Target number of clips to extract"
+                                                >
+                                                    <option value={4}>4 Clips</option>
+                                                    <option value={6}>6 Clips</option>
+                                                    <option value={8}>8 Clips</option>
+                                                    <option value={10}>10 Clips</option>
+                                                    <option value={12}>12 Clips</option>
+                                                </select>
                                                 <button
                                                     type="button"
                                                     onClick={handleFetchGeminiFromUrl}
