@@ -116,14 +116,19 @@
             const [renderedClipResult, setRenderedClipResult] = useState(null);
             const [isRenderingSingle, setIsRenderingSingle] = useState(false);
 
-            // Gemini Batch Importer State
+            // Gemini Batch Importer & File Load State
             const [importModalOpen, setImportModalOpen] = useState(false);
+            const [importModalTab, setImportModalTab] = useState('choice'); // 'choice' | 'api' | 'file'
             const [importRawText, setImportRawText] = useState('');
             const [importUrl, setImportUrl] = useState('');
             const [isFetchingGemini, setIsFetchingGemini] = useState(false);
             const [geminiSuccessMsg, setGeminiSuccessMsg] = useState('');
             const [importAppendMode, setImportAppendMode] = useState(true);
             const [importError, setImportError] = useState('');
+
+            // Batch Distribution & Chunk Rendering State
+            const [batchChunkSize, setBatchChunkSize] = useState(10); // 5, 10, 15, 20
+            const [activeBatchIndex, setActiveBatchIndex] = useState(0); // 0-indexed batch page
 
             // Kaggle Environment & Cookies State
             const [hasCookies, setHasCookies] = useState(false);
@@ -508,6 +513,45 @@
                 }
             };
 
+            const handleFileUpload = (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                setImportError('');
+                setGeminiSuccessMsg('');
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const text = event.target.result;
+                    setImportRawText(text);
+                    setGeminiSuccessMsg(`Loaded "${file.name}" (${(file.size / 1024).toFixed(1)} KB) into editor.`);
+                };
+                reader.onerror = () => {
+                    setImportError('Failed to read selected file.');
+                };
+                reader.readAsText(file);
+            };
+
+            const handleDownloadJson = () => {
+                const dataToExport = curatedClips.length > 0 ? curatedClips : (importRawText ? (() => {
+                    try { return JSON.parse(importRawText); } catch { return importRawText; }
+                })() : null);
+
+                if (!dataToExport) {
+                    alert('No curated clips or JSON available to download yet.');
+                    return;
+                }
+
+                const jsonStr = typeof dataToExport === 'string' ? dataToExport : JSON.stringify(dataToExport, null, 2);
+                const blob = new Blob([jsonStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `curated_clips_${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
             const parseAndImportGeminiBatch = () => {
                 setImportError('');
                 const raw = (importRawText || '').trim();
@@ -878,7 +922,12 @@
                                 onInstallDeps={() => checkDependencies(true)}
                                 isInstallingDeps={isInstallingDeps}
                                 onOpenDirectorPreview={openDirectorPreview}
-                                onOpenImportModal={() => { setImportError(''); setImportModalOpen(true); }}
+                                onOpenImportModal={() => { setImportError(''); setGeminiSuccessMsg(''); setImportModalTab('choice'); setImportModalOpen(true); }}
+                                batchChunkSize={batchChunkSize}
+                                setBatchChunkSize={setBatchChunkSize}
+                                activeBatchIndex={activeBatchIndex}
+                                setActiveBatchIndex={setActiveBatchIndex}
+                                onDownloadJson={handleDownloadJson}
                                 globalTitleY={globalTitleY}
                                 setGlobalTitleY={setGlobalTitleY}
                                 globalMarginV={globalMarginV}
@@ -898,18 +947,18 @@
                         )}
                     </main>
 
-                    {/* Gemini Batch Import Modal */}
+                    {/* Gemini Batch Import & JSON File Modal */}
                     {importModalOpen && (
-                        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-                            <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl">
+                        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl animate-scale-in">
                                 <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                                     <div className="flex items-center gap-2.5">
                                         <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-md">
                                             <Icon name="sparkles" className="w-4 h-4" />
                                         </div>
                                         <div>
-                                            <h3 className="text-base font-bold text-white">Import Gemini Batch Timestamps</h3>
-                                            <p className="text-xs text-slate-400">Paste Gemini JSON output or timestamp lines directly</p>
+                                            <h3 className="text-base font-bold text-white">Curated Clips Importer</h3>
+                                            <p className="text-xs text-slate-400">Choose to call the Gemini API live or feed an existing .json file</p>
                                         </div>
                                     </div>
                                     <button
@@ -920,49 +969,111 @@
                                     </button>
                                 </div>
 
+                                {/* Step 1 Choice / Mode Selector Tabs */}
+                                <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
+                                    <button
+                                        type="button"
+                                        onClick={() => { setImportModalTab('api'); setImportError(''); }}
+                                        className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${
+                                            importModalTab === 'api' || importModalTab === 'choice'
+                                                ? 'bg-blue-600 text-white shadow-md'
+                                                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                                        }`}
+                                    >
+                                        <Icon name="sparkles" className="w-3.5 h-3.5" />
+                                        Mode A: Query Gemini API Live
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setImportModalTab('file'); setImportError(''); }}
+                                        className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition ${
+                                            importModalTab === 'file'
+                                                ? 'bg-indigo-600 text-white shadow-md'
+                                                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                                        }`}
+                                    >
+                                        <Icon name="file-text" className="w-3.5 h-3.5" />
+                                        Mode B: Feed Existing .json File
+                                    </button>
+                                </div>
+
                                 <div className="space-y-4">
-                                    {/* Extension Tab: Auto Curate from Video URL */}
-                                    <div className="p-3.5 bg-blue-950/30 border border-blue-500/20 rounded-2xl space-y-2.5">
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
-                                                <Icon name="sparkles" className="w-3.5 h-3.5 text-blue-400" />
-                                                Gemini Auto-Curation Extension (Paste Video URL)
-                                            </span>
-                                            <span className="text-[10px] text-blue-400/80 font-mono bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
-                                                gemini-3.5-flash
-                                            </span>
+                                    {/* Tab 1: Live Gemini API Query */}
+                                    {(importModalTab === 'api' || importModalTab === 'choice') && (
+                                        <div className="p-4 bg-blue-950/20 border border-blue-500/20 rounded-2xl space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
+                                                    <Icon name="globe" className="w-3.5 h-3.5 text-blue-400" />
+                                                    Query Gemini API via YouTube URL
+                                                </span>
+                                                <span className="text-[10px] text-blue-400/80 font-mono bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
+                                                    gemini-3.5-flash
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="text"
+                                                    value={importUrl}
+                                                    onChange={(e) => setImportUrl(e.target.value)}
+                                                    placeholder="https://www.youtube.com/watch?v=..."
+                                                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={handleFetchGeminiFromUrl}
+                                                    disabled={isFetchingGemini || !importUrl.trim()}
+                                                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-1.5 whitespace-nowrap transition active:scale-95"
+                                                >
+                                                    {isFetchingGemini ? (
+                                                        <>
+                                                            <Icon name="loader-2" className="w-3.5 h-3.5 animate-spin" />
+                                                            Calling API...
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <Icon name="sparkles" className="w-3.5 h-3.5" />
+                                                            Fetch .json
+                                                        </>
+                                                    )}
+                                                </button>
+                                            </div>
+                                            <p className="text-[11px] text-slate-400">
+                                                Fetches video transcript timestamps $\rightarrow$ prompts Gemini AI $\rightarrow$ automatically loads structured JSON into the editor below.
+                                            </p>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <input
-                                                type="text"
-                                                value={importUrl}
-                                                onChange={(e) => setImportUrl(e.target.value)}
-                                                placeholder="https://www.youtube.com/watch?v=..."
-                                                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={handleFetchGeminiFromUrl}
-                                                disabled={isFetchingGemini || !importUrl.trim()}
-                                                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-1.5 whitespace-nowrap transition active:scale-95"
-                                            >
-                                                {isFetchingGemini ? (
-                                                    <>
-                                                        <Icon name="loader-2" className="w-3.5 h-3.5 animate-spin" />
-                                                        Curating...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Icon name="sparkles" className="w-3.5 h-3.5" />
-                                                        Get .json via Gemini
-                                                    </>
-                                                )}
-                                            </button>
+                                    )}
+
+                                    {/* Tab 2: Upload Saved .json File */}
+                                    {importModalTab === 'file' && (
+                                        <div className="p-4 bg-indigo-950/20 border border-indigo-500/20 rounded-2xl space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                                                    <Icon name="upload-cloud" className="w-3.5 h-3.5 text-indigo-400" />
+                                                    Load Saved .json File (Zero API Usage)
+                                                </span>
+                                                <span className="text-[10px] text-indigo-400 font-mono bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
+                                                    Local Disk
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <label className="flex-1 border-2 border-dashed border-slate-700 hover:border-indigo-500/60 bg-slate-950/80 rounded-xl p-3 text-center cursor-pointer transition">
+                                                    <input
+                                                        type="file"
+                                                        accept=".json,text/plain"
+                                                        onChange={handleFileUpload}
+                                                        className="hidden"
+                                                    />
+                                                    <span className="text-xs text-slate-300 font-semibold flex items-center justify-center gap-1.5">
+                                                        <Icon name="file-up" className="w-4 h-4 text-indigo-400" />
+                                                        Click to select .json file from your computer
+                                                    </span>
+                                                </label>
+                                            </div>
+                                            <p className="text-[11px] text-slate-400">
+                                                Loads any previously downloaded or curated clips file without consuming Gemini API tokens or rate limits.
+                                            </p>
                                         </div>
-                                        <p className="text-[11px] text-slate-400">
-                                            Pastes the video URL $\rightarrow$ fetches timestamps & extracts the top viral clips via Gemini API $\rightarrow$ populates the JSON below and feeds the system.
-                                        </p>
-                                    </div>
+                                    )}
 
                                     {/* Success Message Banner */}
                                     {geminiSuccessMsg && (
@@ -972,9 +1083,20 @@
                                         </div>
                                     )}
 
+                                    {/* JSON Text Editor & Options */}
                                     <div className="flex items-center justify-between text-xs pt-1">
-                                        <label className="font-semibold text-slate-300">Or Paste / Edit Curated JSON Output:</label>
-                                        <div className="flex items-center gap-2">
+                                        <label className="font-semibold text-slate-300">Curated JSON Content / Raw Timestamps:</label>
+                                        <div className="flex items-center gap-3">
+                                            {/* Download Curated JSON Button */}
+                                            <button
+                                                type="button"
+                                                onClick={handleDownloadJson}
+                                                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-blue-300 border border-slate-700 rounded-lg text-[11px] font-bold flex items-center gap-1 transition"
+                                                title="Save this JSON file to your computer for reuse"
+                                            >
+                                                <Icon name="download" className="w-3 h-3" />
+                                                💾 Save / Download .json
+                                            </button>
                                             <label className="flex items-center gap-1.5 cursor-pointer text-slate-300">
                                                 <input
                                                     type="checkbox"
@@ -982,13 +1104,13 @@
                                                     onChange={(e) => setImportAppendMode(e.target.checked)}
                                                     className="w-3.5 h-3.5 rounded text-blue-600 bg-slate-950 border-slate-700"
                                                 />
-                                                Append to existing gallery ({curatedClips.length} clips)
+                                                Append to existing ({curatedClips.length})
                                             </label>
                                         </div>
                                     </div>
 
                                     <textarea
-                                        rows={8}
+                                        rows={7}
                                         value={importRawText}
                                         onChange={(e) => setImportRawText(e.target.value)}
                                         placeholder={`Example JSON:
@@ -1029,7 +1151,7 @@
                                             onClick={parseAndImportGeminiBatch}
                                             className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-blue-500/20"
                                         >
-                                            Load Clips into Gallery
+                                            Feed & Load into Gallery
                                         </button>
                                     </div>
                                 </div>
@@ -1075,6 +1197,7 @@
             handleStartBatchRender, isRenderingBatch, batchStatus, batchId,
             depsStatus, onCheckDeps, onInstallDeps, isInstallingDeps,
             onOpenDirectorPreview, onOpenImportModal,
+            batchChunkSize, setBatchChunkSize, activeBatchIndex, setActiveBatchIndex, onDownloadJson,
             globalTitleY, setGlobalTitleY, globalMarginV, setGlobalMarginV,
             hasCookies, freeDiskGb, onCookiesUpload, onCleanupTemp, onTogglePresentationMode
         }) {
@@ -1338,139 +1461,259 @@
                                 </div>
                             )}
 
-                            {/* Clips Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {curatedClips.map((clip, index) => {
-                                    const isSelected = selectedClipIndices.includes(index);
-                                    const duration = (clip.end - clip.start).toFixed(1);
-                                    const score = clip.virality_score || 85;
-                                    const scoreColor = score >= 90 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
-                                                       score >= 80 ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                                                       'bg-amber-500/20 text-amber-400 border-amber-500/30';
+                            {/* Batch Distribution & Chunk Navigator */}
+                            {(() => {
+                                const totalClips = curatedClips.length;
+                                const totalBatches = Math.ceil(totalClips / batchChunkSize);
+                                const currentBatch = Math.min(activeBatchIndex, Math.max(0, totalBatches - 1));
+                                const startClipIdx = currentBatch * batchChunkSize;
+                                const endClipIdx = Math.min(startClipIdx + batchChunkSize, totalClips);
+                                const currentBatchClipsIndices = Array.from({ length: endClipIdx - startClipIdx }, (_, i) => startClipIdx + i);
+                                const isCurrentBatchFullySelected = currentBatchClipsIndices.length > 0 && currentBatchClipsIndices.every(idx => selectedClipIndices.includes(idx));
 
-                                    return (
-                                        <div
-                                            key={index}
-                                            onClick={() => toggleClipSelection(index)}
-                                            className={`p-5 rounded-2xl border transition-all cursor-pointer select-none flex flex-col justify-between gap-4 ${
-                                                isSelected 
-                                                    ? 'bg-slate-900 border-blue-500 shadow-lg shadow-blue-500/10' 
-                                                    : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-                                            }`}
-                                        >
-                                            <div className="space-y-3">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${scoreColor}`}>
-                                                        Viral Score {score}
-                                                    </span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-[11px] text-slate-400 font-mono">
-                                                            {clip.start.toFixed(1)}s – {clip.end.toFixed(1)}s ({duration}s)
-                                                        </span>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={isSelected}
-                                                            onChange={() => {}}
-                                                            className="w-4 h-4 rounded text-blue-600 bg-slate-950 border-slate-700 focus:ring-0 cursor-pointer"
-                                                        />
-                                                    </div>
+                                const selectOnlyThisBatch = () => {
+                                    setSelectedClipIndices(currentBatchClipsIndices);
+                                };
+
+                                return (
+                                    <div className="bg-slate-950/90 border border-blue-500/30 rounded-2xl p-4 shadow-xl space-y-3">
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                                            <div className="flex items-center gap-2.5">
+                                                <div className="w-7 h-7 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center font-bold text-xs">
+                                                    📦
                                                 </div>
-
-                                                <h3 className="font-bold text-white text-base leading-snug line-clamp-2">
-                                                    {clip.hook_sentence || clip.title || `Clip #${index + 1}`}
-                                                </h3>
-
-                                                <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed">
-                                                    {clip.reason || clip.virality_reason || 'Identified high-impact dialogue segment.'}
-                                                </p>
-
-                                                {/* Interactive In/Out Fine-Tuning Scrubber */}
-                                                <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-2.5 space-y-1.5" onClick={(e) => e.stopPropagation()}>
-                                                    <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold">
-                                                        <span className="flex items-center gap-1.5">
-                                                            <Icon name="scissors" className="w-3 h-3 text-blue-400" />
-                                                            Trim Boundaries
+                                                <div>
+                                                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                                                        Batch Distribution Manager
+                                                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                                                            {totalBatches} Batch{totalBatches > 1 ? 'es' : ''} Total ({totalClips} clips)
                                                         </span>
-                                                        <span className="font-mono text-blue-400 font-bold">{duration}s</span>
-                                                    </div>
-                                                    <div className="grid grid-cols-2 gap-2 text-xs">
-                                                        <div>
-                                                            <span className="text-[10px] text-slate-500 uppercase font-mono block mb-0.5">Start</span>
-                                                            <div className="flex items-center gap-1">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => updateClipTime(index, 'start', Math.max(0, clip.start - 1.0))}
-                                                                    className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
-                                                                >-1s</button>
-                                                                <input
-                                                                    type="number"
-                                                                    step="0.5"
-                                                                    value={clip.start.toFixed(1)}
-                                                                    onChange={(e) => updateClipTime(index, 'start', parseFloat(e.target.value) || 0)}
-                                                                    className="w-full bg-slate-900 border border-slate-800 rounded px-1 py-0.5 text-center font-mono text-white text-[11px] focus:outline-none focus:border-blue-500"
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => updateClipTime(index, 'start', Math.min(clip.end - 5, clip.start + 1.0))}
-                                                                    className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
-                                                                >+1s</button>
-                                                            </div>
-                                                        </div>
-                                                        <div>
-                                                            <span className="text-[10px] text-slate-500 uppercase font-mono block mb-0.5">End</span>
-                                                            <div className="flex items-center gap-1">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => updateClipTime(index, 'end', Math.max(clip.start + 5, clip.end - 1.0))}
-                                                                    className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
-                                                                >-1s</button>
-                                                                <input
-                                                                    type="number"
-                                                                    step="0.5"
-                                                                    value={clip.end.toFixed(1)}
-                                                                    onChange={(e) => updateClipTime(index, 'end', parseFloat(e.target.value) || clip.start + 10)}
-                                                                    className="w-full bg-slate-900 border border-slate-800 rounded px-1 py-0.5 text-center font-mono text-white text-[11px] focus:outline-none focus:border-blue-500"
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => updateClipTime(index, 'end', clip.end + 1.0)}
-                                                                    className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
-                                                                >+1s</button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
+                                                    </h3>
+                                                    <p className="text-[11px] text-slate-400">
+                                                        Showing Batch {currentBatch + 1} of {totalBatches} (Clips #{startClipIdx + 1} to #{endClipIdx}). Render one batch at a time to prevent crashes.
+                                                    </p>
                                                 </div>
                                             </div>
 
-                                            <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
+                                            {/* Batch size selector and quick action */}
+                                            <div className="flex items-center gap-2.5 text-xs">
+                                                <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-xl">
+                                                    <span className="text-slate-400 text-[11px]">Batch Size:</span>
+                                                    <select
+                                                        value={batchChunkSize}
+                                                        onChange={(e) => {
+                                                            setBatchChunkSize(parseInt(e.target.value, 10));
+                                                            setActiveBatchIndex(0);
+                                                        }}
+                                                        className="bg-transparent text-white font-mono text-xs font-bold focus:outline-none cursor-pointer"
+                                                    >
+                                                        <option value={5} className="bg-slate-900">5 Clips / Batch</option>
+                                                        <option value={10} className="bg-slate-900">10 Clips / Batch</option>
+                                                        <option value={15} className="bg-slate-900">15 Clips / Batch</option>
+                                                        <option value={20} className="bg-slate-900">20 Clips / Batch</option>
+                                                    </select>
+                                                </div>
+
                                                 <button
                                                     type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        if (onTogglePresentationMode) onTogglePresentationMode(index);
-                                                    }}
-                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition ${clip.presentation_mode ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-white'}`}
-                                                    title="Toggle between 9:16 portrait tracking and 16:9 tutorial slide preservation"
+                                                    onClick={selectOnlyThisBatch}
+                                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border shadow-sm ${
+                                                        isCurrentBatchFullySelected
+                                                            ? 'bg-blue-600/30 text-blue-300 border-blue-500/50'
+                                                            : 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500'
+                                                    }`}
                                                 >
-                                                    <Icon name={clip.presentation_mode ? "monitor" : "film"} className="w-3.5 h-3.5" />
-                                                    {clip.presentation_mode ? "16:9 Presentation" : "9:16 Auto Director"}
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        if (onOpenDirectorPreview) onOpenDirectorPreview(clip, index);
-                                                    }}
-                                                    className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
-                                                >
-                                                    <Icon name="video" className="w-3.5 h-3.5 text-blue-400" />
-                                                    Director Preview & Review
+                                                    <Icon name="check-square" className="w-3.5 h-3.5" />
+                                                    Select Only Batch #{currentBatch + 1} ({currentBatchClipsIndices.length})
                                                 </button>
                                             </div>
                                         </div>
-                                    );
-                                })}
-                            </div>
+
+                                        {/* Batch Navigation Tabs */}
+                                        <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1">
+                                            {Array.from({ length: totalBatches }).map((_, bIdx) => {
+                                                const bStart = bIdx * batchChunkSize;
+                                                const bEnd = Math.min(bStart + batchChunkSize, totalClips);
+                                                const isActive = bIdx === currentBatch;
+                                                const bIndices = Array.from({ length: bEnd - bStart }, (__, i) => bStart + i);
+                                                const bSelectedCount = bIndices.filter(i => selectedClipIndices.includes(i)).length;
+
+                                                return (
+                                                    <button
+                                                        key={bIdx}
+                                                        type="button"
+                                                        onClick={() => setActiveBatchIndex(bIdx)}
+                                                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition flex items-center gap-2 border ${
+                                                            isActive
+                                                                ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-500/20'
+                                                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                                                        }`}
+                                                    >
+                                                        <span>Batch {bIdx + 1} ({bStart + 1}–{bEnd})</span>
+                                                        {bSelectedCount > 0 && (
+                                                            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${isActive ? 'bg-blue-900 text-white' : 'bg-blue-500/20 text-blue-300'}`}>
+                                                                {bSelectedCount} sel
+                                                            </span>
+                                                        )}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* Clips Grid (Sliced to Active Batch) */}
+                            {(() => {
+                                const totalClips = curatedClips.length;
+                                const totalBatches = Math.ceil(totalClips / batchChunkSize);
+                                const currentBatch = Math.min(activeBatchIndex, Math.max(0, totalBatches - 1));
+                                const startClipIdx = currentBatch * batchChunkSize;
+                                const endClipIdx = Math.min(startClipIdx + batchChunkSize, totalClips);
+                                const visibleClipsWithIndices = curatedClips
+                                    .map((clip, idx) => ({ clip, idx }))
+                                    .slice(startClipIdx, endClipIdx);
+
+                                return (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        {visibleClipsWithIndices.map(({ clip, idx: index }) => {
+                                            const isSelected = selectedClipIndices.includes(index);
+                                            const duration = (clip.end - clip.start).toFixed(1);
+                                            const score = clip.virality_score || 85;
+                                            const scoreColor = score >= 90 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                                                               score >= 80 ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                                                               'bg-amber-500/20 text-amber-400 border-amber-500/30';
+
+                                            return (
+                                                <div
+                                                    key={index}
+                                                    onClick={() => toggleClipSelection(index)}
+                                                    className={`p-5 rounded-2xl border transition-all cursor-pointer select-none flex flex-col justify-between gap-4 ${
+                                                        isSelected 
+                                                            ? 'bg-slate-900 border-blue-500 shadow-lg shadow-blue-500/10' 
+                                                            : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                                                    }`}
+                                                >
+                                                    <div className="space-y-3">
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono text-[10px] font-bold">
+                                                                    #{index + 1}
+                                                                </span>
+                                                                <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${scoreColor}`}>
+                                                                    Viral Score {score}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-[11px] text-slate-400 font-mono">
+                                                                    {clip.start.toFixed(1)}s – {clip.end.toFixed(1)}s ({duration}s)
+                                                                </span>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={isSelected}
+                                                                    onChange={() => {}}
+                                                                    className="w-4 h-4 rounded text-blue-600 bg-slate-950 border-slate-700 focus:ring-0 cursor-pointer"
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        <h3 className="font-bold text-white text-base leading-snug line-clamp-2">
+                                                            {clip.hook_sentence || clip.title || `Clip #${index + 1}`}
+                                                        </h3>
+
+                                                        <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed">
+                                                            {clip.reason || clip.virality_reason || 'Identified high-impact dialogue segment.'}
+                                                        </p>
+
+                                                        {/* Interactive In/Out Fine-Tuning Scrubber */}
+                                                        <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-2.5 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                                                            <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold">
+                                                                <span className="flex items-center gap-1.5">
+                                                                    <Icon name="scissors" className="w-3 h-3 text-blue-400" />
+                                                                    Trim Boundaries
+                                                                </span>
+                                                                <span className="font-mono text-blue-400 font-bold">{duration}s</span>
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                                                <div>
+                                                                    <span className="text-[10px] text-slate-500 uppercase font-mono block mb-0.5">Start</span>
+                                                                    <div className="flex items-center gap-1">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateClipTime(index, 'start', Math.max(0, clip.start - 1.0))}
+                                                                            className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
+                                                                        >-1s</button>
+                                                                        <input
+                                                                            type="number"
+                                                                            step="0.5"
+                                                                            value={clip.start.toFixed(1)}
+                                                                            onChange={(e) => updateClipTime(index, 'start', parseFloat(e.target.value) || 0)}
+                                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-1 py-0.5 text-center font-mono text-white text-[11px] focus:outline-none focus:border-blue-500"
+                                                                        />
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateClipTime(index, 'start', Math.min(clip.end - 5, clip.start + 1.0))}
+                                                                            className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
+                                                                        >+1s</button>
+                                                                    </div>
+                                                                </div>
+                                                                <div>
+                                                                    <span className="text-[10px] text-slate-500 uppercase font-mono block mb-0.5">End</span>
+                                                                    <div className="flex items-center gap-1">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateClipTime(index, 'end', Math.max(clip.start + 5, clip.end - 1.0))}
+                                                                            className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
+                                                                        >-1s</button>
+                                                                        <input
+                                                                            type="number"
+                                                                            step="0.5"
+                                                                            value={clip.end.toFixed(1)}
+                                                                            onChange={(e) => updateClipTime(index, 'end', parseFloat(e.target.value) || clip.start + 10)}
+                                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-1 py-0.5 text-center font-mono text-white text-[11px] focus:outline-none focus:border-blue-500"
+                                                                        />
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateClipTime(index, 'end', clip.end + 1.0)}
+                                                                            className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono border border-slate-800"
+                                                                        >+1s</button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (onTogglePresentationMode) onTogglePresentationMode(index);
+                                                            }}
+                                                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition ${clip.presentation_mode ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-white'}`}
+                                                            title="Toggle between 9:16 portrait tracking and 16:9 tutorial slide preservation"
+                                                        >
+                                                            <Icon name={clip.presentation_mode ? "monitor" : "film"} className="w-3.5 h-3.5" />
+                                                            {clip.presentation_mode ? "16:9 Presentation" : "9:16 Auto Director"}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (onOpenDirectorPreview) onOpenDirectorPreview(clip, index);
+                                                            }}
+                                                            className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+                                                        >
+                                                            <Icon name="video" className="w-3.5 h-3.5 text-blue-400" />
+                                                            Director Preview & Review
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                );
+                            })()}
 
                             {/* Batch Render Control Bar */}
                             <div className="sticky bottom-6 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-4 z-40">
@@ -1529,6 +1772,16 @@
                                 </div>
 
                                 <div className="flex items-center gap-3 w-full md:w-auto">
+                                    <button
+                                        type="button"
+                                        onClick={onDownloadJson}
+                                        className="px-3.5 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+                                        title="Download full curated JSON to save your progress"
+                                    >
+                                        <Icon name="download" className="w-4 h-4 text-blue-400" />
+                                        💾 Save .json
+                                    </button>
+
                                     <button
                                         onClick={handleStartBatchRender}
                                         disabled={isRenderingBatch || selectedClipIndices.length === 0}
