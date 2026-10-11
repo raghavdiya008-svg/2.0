@@ -725,11 +725,15 @@
                         let errDetail = 'Batch submission failed';
                         try {
                             const text = await res.text();
-                            try {
-                                const parsed = JSON.parse(text);
-                                errDetail = parsed.detail || parsed.message || text;
-                            } catch {
-                                errDetail = text.slice(0, 200) || errDetail;
+                            if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+                                errDetail = 'Gateway / Proxy Timeout (504/524): Cloudflare tunnel dropped connection during long operation. The batch is now configured to queue immediately.';
+                            } else {
+                                try {
+                                    const parsed = JSON.parse(text);
+                                    errDetail = parsed.detail || parsed.message || text;
+                                } catch {
+                                    errDetail = text.slice(0, 200) || errDetail;
+                                }
                             }
                         } catch {}
                         throw new Error(errDetail);

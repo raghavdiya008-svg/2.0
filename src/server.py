@@ -1399,27 +1399,11 @@ def api_render_batch(req: BatchRenderRequest):
             cached_words = cached["words"]
 
     if not cached_words:
-        try:
-            temp_wav = os.path.join(TEMP_DIR, f"probe_{uuid.uuid4().hex[:8]}.wav")
-            import audio_intelligence
-            audio_intelligence.extract_audio(video_path, temp_wav)
-            md5 = pipeline.compute_audio_stream_md5(temp_wav)
-            cached = pipeline._load_audio_cache(md5)
-            if cached and "words" in cached:
-                cached_words = cached["words"]
-            else:
-                # Transcribe full audio once so all batch clips share the word-level transcript!
-                logger.info(f"[server] Audio cache miss for batch. Running WhisperX ASR on {safe_name}...")
-                cached_words = audio_intelligence.run_whisperx_alignment(temp_wav, language="en")
-                if cached_words:
-                    pipeline._save_audio_cache(md5, {"words": cached_words, "silence_gaps": []})
-            if os.path.isfile(temp_wav):
-                try:
-                    os.remove(temp_wav)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"[server] Could not probe or run WhisperX ASR for batch: {e}")
+        # Check cache by safe video name or base name
+        base_name = os.path.splitext(safe_name)[0]
+        cached = pipeline._load_audio_cache(safe_name) or pipeline._load_audio_cache(base_name)
+        if cached and "words" in cached:
+            cached_words = cached["words"]
 
     with _batch_lock:
         _batches[batch_id] = {
@@ -1452,7 +1436,7 @@ def api_render_batch(req: BatchRenderRequest):
                 "bgm_path": _resolve_bgm_path(req.bgm_track or clip.get("bgm_track")),
                 "bgm_volume": req.bgm_volume if req.bgm_volume is not None else clip.get("bgm_volume", 0.12),
                 "bgm_ducking": req.bgm_ducking if req.bgm_ducking is not None else clip.get("bgm_ducking", True),
-                "words": cached_words,
+                "words": clip.get("words") or cached_words,
                 "file_slug": clip.get("file_slug"),
                 "output_filename": clip.get("output_filename"),
             }
