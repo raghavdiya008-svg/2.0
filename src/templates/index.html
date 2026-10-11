@@ -235,6 +235,11 @@
                 return () => clearInterval(interval);
             }, [batchId, isRenderingBatch]);
 
+            // Automatically keep selectedClipIndices clamped within curatedClips bounds
+            useEffect(() => {
+                setSelectedClipIndices(prev => prev.filter(i => typeof i === 'number' && i >= 0 && i < curatedClips.length));
+            }, [curatedClips.length]);
+
             const fetchAssets = async () => {
                 try {
                     const res = await fetch('/list_assets');
@@ -369,6 +374,14 @@
                         const text = await res.text();
                         try {
                             const parsed = JSON.parse(text);
+                            if (Array.isArray(parsed.detail)) {
+                                return parsed.detail.map(d => {
+                                    const locStr = Array.isArray(d.loc) ? d.loc.slice(-1)[0] + ': ' : '';
+                                    return `${locStr}${d.msg || JSON.stringify(d)}`;
+                                }).join(' | ');
+                            } else if (typeof parsed.detail === 'object' && parsed.detail !== null) {
+                                return JSON.stringify(parsed.detail);
+                            }
                             return parsed.detail || parsed.message || text;
                         } catch {
                             return text.length > 300 ? text.slice(0, 300) + '...' : text;
@@ -699,25 +712,29 @@
                     return;
                 }
 
+                let resultingCount = 0;
                 setCuratedClips(prev => {
                     const combined = importAppendMode ? [...prev, ...newClips] : newClips;
                     const seen = new Set();
-                    return combined.filter(c => {
+                    const deduplicated = combined.filter(c => {
                         const key = `${Math.round(c.start)}_${Math.round(c.end)}`;
                         if (seen.has(key)) return false;
                         seen.add(key);
                         return true;
                     });
+                    resultingCount = deduplicated.length;
+                    return deduplicated;
                 });
 
-                // Auto-select the imported clips
+                // Auto-select the imported clips within valid bounds
                 setSelectedClipIndices(prev => {
                     if (importAppendMode) {
                         const startIdx = curatedClips.length;
                         const addedIndices = newClips.map((_, i) => startIdx + i);
-                        return [...prev, ...addedIndices];
+                        const combined = [...prev, ...addedIndices];
+                        return Array.from(new Set(combined)).filter(i => i < resultingCount);
                     } else {
-                        return newClips.map((_, i) => i);
+                        return Array.from({ length: resultingCount }, (_, i) => i);
                     }
                 });
 
@@ -740,7 +757,19 @@
 
             const handleStartBatchRender = async () => {
                 if (isRenderingBatch || selectedClipIndices.length === 0) return;
-                const clipsToRender = selectedClipIndices.map(i => curatedClips[i]);
+                
+                // Sanitize and filter only valid in-bounds clips
+                const clipsToRender = selectedClipIndices
+                    .filter(i => typeof i === 'number' && i >= 0 && i < curatedClips.length)
+                    .map(i => curatedClips[i])
+                    .filter(c => c && typeof c === 'object' && (typeof c.start === 'number' || typeof c.start_time === 'number'));
+
+                if (clipsToRender.length === 0) {
+                    alert("Please select at least one valid clip from the gallery to render.");
+                    return;
+                }
+
+                const videoFileToRender = (selectedVideo && selectedVideo.trim()) || (videos && videos.length > 0 ? videos[0] : '');
                 setIsRenderingBatch(true);
 
                 try {
@@ -748,7 +777,7 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            file_name: selectedVideo,
+                            file_name: videoFileToRender,
                             clips: clipsToRender,
                             speed: renderSpeed || 1.0,
                             watermark_logo: watermarkPreset1?.enabled ? watermarkPreset1.file : (selectedLogo || null),
@@ -773,7 +802,16 @@
                             } else {
                                 try {
                                     const parsed = JSON.parse(text);
-                                    errDetail = parsed.detail || parsed.message || text;
+                                    if (Array.isArray(parsed.detail)) {
+                                        errDetail = parsed.detail.map(d => {
+                                            const locStr = Array.isArray(d.loc) ? d.loc.slice(-1)[0] + ': ' : '';
+                                            return `${locStr}${d.msg || JSON.stringify(d)}`;
+                                        }).join(' | ');
+                                    } else if (typeof parsed.detail === 'object' && parsed.detail !== null) {
+                                        errDetail = JSON.stringify(parsed.detail);
+                                    } else {
+                                        errDetail = parsed.detail || parsed.message || text;
+                                    }
                                 } catch {
                                     errDetail = text.slice(0, 200) || errDetail;
                                 }
@@ -1881,7 +1919,7 @@
                             <div className="sticky bottom-6 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-4 z-40">
                                 <div className="flex items-center gap-4">
                                     <span className="text-sm font-bold text-white">
-                                        Selected: <span className="text-blue-400 font-mono text-base">{selectedClipIndices.length}</span> of {curatedClips.length} clips
+                                        Selected: <span className="text-blue-400 font-mono text-base">{selectedClipIndices.filter(i => i < curatedClips.length).length}</span> of {curatedClips.length} clips
                                     </span>
 
                                     {/* Speed Factor */}
@@ -2017,7 +2055,7 @@
                                         ) : (
                                             <>
                                                 <Icon name="video" className="w-4 h-4" />
-                                                Render Selected Clips ({selectedClipIndices.length})
+                                                Render Selected Clips ({selectedClipIndices.filter(i => i < curatedClips.length).length})
                                             </>
                                         )}
                                     </button>

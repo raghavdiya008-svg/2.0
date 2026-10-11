@@ -417,8 +417,8 @@ class CurateRequest(BaseModel):
     async_mode: bool = False
 
 class BatchRenderRequest(BaseModel):
-    file_name: str
-    clips: List[Dict[str, Any]]
+    file_name: Optional[str] = None
+    clips: List[Any]
     watermark_logo: Optional[str] = None
     watermark_coords: Optional[Dict[str, Any]] = None
     bgm_track: Optional[str] = None
@@ -1570,13 +1570,45 @@ def api_render_batch(req: BatchRenderRequest):
     Accepts selected clips from the Review Gallery, queues each clip to the
     RenderQueueManager, and tracks batch state.
     """
-    video_path = resolve_input_video_path(req.file_name)
+    target_file = (req.file_name or "").strip()
+    video_path = resolve_input_video_path(target_file) if target_file else None
+
+    # Fallback 1: check if any clip has a file_name or video attribute
+    if not video_path and req.clips:
+        for clip in req.clips:
+            if isinstance(clip, dict):
+                cand = clip.get("file_name") or clip.get("video")
+                if cand:
+                    video_path = resolve_input_video_path(str(cand))
+                    if video_path:
+                        break
+
+    # Fallback 2: pick the newest video in INPUTS_DIR
+    if not video_path and os.path.exists(INPUTS_DIR):
+        candidates = [
+            os.path.join(INPUTS_DIR, f) for f in os.listdir(INPUTS_DIR)
+            if f.lower().endswith(('.mp4', '.mkv', '.mov', '.webm', '.avi')) and not f.startswith('.')
+        ]
+        if candidates:
+            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            video_path = candidates[0]
+            logger.info(f"[server] Auto-resolved batch render video to latest input: {video_path}")
+
     if not video_path:
-        raise HTTPException(status_code=404, detail=f"Video file '{req.file_name}' not found.")
+        raise HTTPException(status_code=404, detail=f"Video file '{req.file_name or ''}' not found in inputs directory.")
     safe_name = os.path.basename(video_path)
 
-    if not req.clips:
-        raise HTTPException(status_code=400, detail="No clips selected for rendering.")
+    # Sanitize clips: filter out any None, non-dict, or clips lacking start/end
+    clean_clips = []
+    for c in (req.clips or []):
+        if isinstance(c, dict):
+            s = c.get("start", c.get("start_time"))
+            e = c.get("end", c.get("end_time"))
+            if s is not None and e is not None:
+                clean_clips.append(c)
+
+    if not clean_clips:
+        raise HTTPException(status_code=400, detail="No valid clips selected for rendering.")
 
     batch_id = str(uuid.uuid4())
     job_ids = []
@@ -1598,13 +1630,13 @@ def api_render_batch(req: BatchRenderRequest):
         _batches[batch_id] = {
             "batch_id": batch_id,
             "file_name": safe_name,
-            "total": len(req.clips),
+            "total": len(clean_clips),
             "job_ids": [],
-            "clips": req.clips,
+            "clips": clean_clips,
             "created_at": time.time(),
         }
 
-        for i, clip in enumerate(req.clips):
+        for i, clip in enumerate(clean_clips):
             job_id = f"b_{batch_id[:8]}_{i+1}"
             job_data = {
                 "video": safe_name,
