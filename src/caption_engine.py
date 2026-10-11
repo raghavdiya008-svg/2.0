@@ -192,10 +192,10 @@ def _ass_header(
         # Bold  Italic Underline StrikeOut ScaleX ScaleY Spacing Angle
         f"-1,0,0,0,100,100,{spc},0,"
         f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1\n"
-        f"Style: SplitCenter,{safe_font},{font_size},"
+        f"Style: SplitCenter,{safe_font},{int(font_size * 0.90)},"
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         f"-1,0,0,0,100,100,{spc},0,"
-        f"1,{outl},{shad},2,{MARGIN_LR},{MARGIN_LR},940,1\n"
+        f"1,{outl},{shad},5,{MARGIN_LR},{MARGIN_LR},972,1\n"
         f"Style: SlideSub,{safe_font},{font_size},"
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         f"-1,0,0,0,100,100,{spc},0,"
@@ -314,8 +314,22 @@ def generate_karaoke_ass(
             gap_before = current_line and (w_start - prev_end) > gap_threshold_sec
         except (TypeError, ValueError):
             gap_before = False
-        overflow_words = len(current_line) >= max_words_per_line
-        overflow_chars = current_len + len(word_text) + 1 > max_chars_per_line
+        # Determine if word falls into a split_stack shot
+        is_word_split = False
+        if shot_timeline:
+            for s in shot_timeline:
+                if float(s.get("start", 0.0)) <= w_start <= float(s.get("end", 9999.0)):
+                    if s.get("type") == "split_stack":
+                        is_word_split = True
+                    break
+        elif kwargs.get("is_split_stack"):
+            is_word_split = True
+
+        effective_max_words = 3 if is_word_split else max_words_per_line
+        effective_max_chars = 20 if is_word_split else max_chars_per_line
+
+        overflow_words = len(current_line) >= effective_max_words
+        overflow_chars = current_len + len(word_text) + 1 > effective_max_chars
 
         if gap_before or overflow_words or overflow_chars:
             if current_line:

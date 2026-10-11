@@ -1117,7 +1117,37 @@ def compute_visual_hook_score(media_path: str, start_t: float, end_t: float) -> 
         except Exception:
             pass
 
-        if avg_motion >= 6.0 and face_detected:
+        # 3. Shot transition frequency check (rapid cut teaser montage vs continuous scene)
+        # Sample across candidate clip interval to check cut density
+        rapid_teaser_montage = False
+        if (end_t - start_t) >= 10.0:
+            try:
+                # Check 8 evenly spaced probe frames
+                probe_step = (end_t - start_t) / 9.0
+                probe_times = [start_t + i * probe_step for i in range(1, 9)]
+                p_frames = []
+                for pt in probe_times:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, pt * 1000.0))
+                    ret, pf = cap.read()
+                    if ret and pf is not None:
+                        ps = cv2.resize(pf, (160, 90), interpolation=cv2.INTER_AREA)
+                        pg = cv2.cvtColor(ps, cv2.COLOR_BGR2GRAY)
+                        p_frames.append(pg)
+                if len(p_frames) >= 4:
+                    hard_cuts = 0
+                    for k in range(len(p_frames) - 1):
+                        diff_val = float(cv2.absdiff(p_frames[k], p_frames[k + 1]).mean())
+                        if diff_val >= 25.0:  # Hard cut threshold on downsampled frame
+                            hard_cuts += 1
+                    # If cut rate exceeds 0.35 cuts/sec (e.g. 4+ hard cuts in 8 probe samples)
+                    if hard_cuts >= 4:
+                        rapid_teaser_montage = True
+            except Exception:
+                pass
+
+        if rapid_teaser_montage:
+            return 62.0, "[Visual Alert: Rapid Teaser Cuts]"
+        elif avg_motion >= 6.0 and face_detected:
             return 90.0, "[Visual Hook: Dynamic Motion & Face Present]"
         elif avg_motion >= 4.0:
             return 82.0, "[Visual Hook: Active Motion]"

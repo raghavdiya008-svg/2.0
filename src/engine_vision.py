@@ -1557,14 +1557,21 @@ def calculate_tracking_trajectory(
             raw_intervals.append((s_start, s_end))
 
     # Apply temporal hysteresis: merge any shot shorter than MIN_SHOT_DUR into adjacent shot
-    def _is_zero_face(start_t: float, end_t: float) -> bool:
+    def _get_shot_mode(start_t: float, end_t: float) -> str:
         dets = [fd for fd in all_frame_detections if start_t <= fd[0] <= end_t]
         if not dets:
             nearest = min(all_frame_detections, key=lambda fd: abs(fd[0] - (start_t + end_t) / 2.0), default=None)
             if nearest is not None and abs(nearest[0] - (start_t + end_t) / 2.0) <= 1.0:
-                return len(nearest[1]) == 0
-            return False
-        return all(len(fd[1]) == 0 for fd in dets)
+                dets = [nearest]
+        if not dets:
+            return "single"
+        counts = [len(fd[1]) for fd in dets]
+        med = statistics.median(counts) if counts else 1
+        if med == 0:
+            return "zero"
+        elif med >= 2:
+            return "multi"
+        return "single"
 
     shot_intervals: List[Tuple[float, float]] = []
     for interval in raw_intervals:
@@ -1573,24 +1580,28 @@ def calculate_tracking_trajectory(
         else:
             prev_start, prev_end = shot_intervals[-1]
             curr_start, curr_end = interval
-            prev_is_zero = _is_zero_face(prev_start, prev_end)
-            curr_is_zero = _is_zero_face(curr_start, curr_end)
+            prev_mode = _get_shot_mode(prev_start, prev_end)
+            curr_mode = _get_shot_mode(curr_start, curr_end)
 
-            # Never merge a zero-face slide into a face shot if it is >= 0.8s
-            if prev_is_zero != curr_is_zero and ((curr_end - curr_start) >= 0.8 or (prev_end - prev_start) >= 0.8):
+            # Never merge shots with distinct visual modes (e.g. solo close-up vs dual-speaker vs zero-face slide)
+            # if each shot is at least 0.8s
+            if prev_mode != curr_mode and ((curr_end - curr_start) >= 0.8 or (prev_end - prev_start) >= 0.8):
                 shot_intervals.append(interval)
-            # If current or previous shot is less than MIN_SHOT_DUR, merge them
-            elif (curr_end - curr_start) < MIN_SHOT_DUR:
+            # If current or previous shot is less than MIN_SHOT_DUR and they share the same mode, merge them
+            elif (curr_end - curr_start) < MIN_SHOT_DUR and prev_mode == curr_mode:
                 shot_intervals[-1] = (prev_start, curr_end)
-            elif (prev_end - prev_start) < MIN_SHOT_DUR:
+            elif (prev_end - prev_start) < MIN_SHOT_DUR and prev_mode == curr_mode:
+                shot_intervals[-1] = (prev_start, curr_end)
+            elif (curr_end - curr_start) < 0.6:  # Only merge micro-shots <0.6s across modes
                 shot_intervals[-1] = (prev_start, curr_end)
             else:
                 shot_intervals.append(interval)
 
-    # Secondary pass to ensure trailing shot meets MIN_SHOT_DUR if possible
+    # Secondary pass to ensure trailing shot meets MIN_SHOT_DUR if possible (only if same mode)
     if len(shot_intervals) > 1 and (shot_intervals[-1][1] - shot_intervals[-1][0]) < MIN_SHOT_DUR:
-        last_start, last_end = shot_intervals.pop()
-        shot_intervals[-1] = (shot_intervals[-1][0], last_end)
+        if _get_shot_mode(shot_intervals[-1][0], shot_intervals[-1][1]) == _get_shot_mode(shot_intervals[-2][0], shot_intervals[-2][1]):
+            last_start, last_end = shot_intervals.pop()
+            shot_intervals[-1] = (shot_intervals[-1][0], last_end)
 
     shot_timeline: List[Dict[str, Any]] = []
     has_any_blur_box_shot = False
