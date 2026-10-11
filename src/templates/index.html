@@ -80,6 +80,8 @@
             const [selectedVideo, setSelectedVideo] = useState('');
             const [selectedLogo, setSelectedLogo] = useState('');
             const [remoteUrl, setRemoteUrl] = useState('');
+            const [hasCookies, setHasCookies] = useState(false);
+            const [freeDiskGb, setFreeDiskGb] = useState(10.0);
             
             // Ingestion & Audio MD5 Cache State
             const [ingestData, setIngestData] = useState(null);
