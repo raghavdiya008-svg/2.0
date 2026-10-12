@@ -98,11 +98,11 @@ def _find_cookies_file() -> Optional[str]:
 def _ytdlp_extra_args() -> list:
     """
     Returns extra resilience flags for yt-dlp.
-    Injects multi-client fallback (visionos, web_embedded, default) to bypass bot-detection on cloud VMs (Kaggle/Colab).
+    Injects VisionOS client to bypass bot-detection and SABR format drops on cloud VMs (Kaggle/Colab).
     Injects cookies.txt automatically when present.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=visionos,web_embedded,default",
+        "--extractor-args", "youtube:player_client=visionos",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--no-check-certificates",
         "--retries", "3",
@@ -396,7 +396,7 @@ def download_youtube_video(
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
-            "extractor_args": {"youtube": {"player_client": ["visionos", "web_embedded", "default"]}},
+            "extractor_args": {"youtube": {"player_client": ["visionos"]}},
             "nocheckcertificate": True,
             "progress_hooks": [_yt_hook],
         }
@@ -518,7 +518,7 @@ def download_youtube_video(
         if result.returncode != 0 or not os.path.isfile(safe_filename):
             print("[media_downloader] VisionOS primary failed — retrying with standard single stream...")
             fallback_cmd = _ytdlp_cmd() + [
-                "--extractor-args", "youtube:player_client=visionos,web_embedded,default",
+                "--extractor-args", "youtube:player_client=visionos",
                 "-f", "best[ext=mp4]/best",
                 "--merge-output-format", "mp4",
                 "-o", safe_filename,
@@ -657,7 +657,7 @@ def extract_youtube_transcript_with_timestamps(url: str) -> Optional[List[Dict[s
             "skip_download": True,
             "quiet": True,
             "no_warnings": True,
-            "extractor_args": {"youtube": {"player_client": ["visionos", "web_embedded", "default"]}},
+            "extractor_args": {"youtube": {"player_client": ["visionos"]}},
             "nocheckcertificate": True,
         }
         cookies = _find_cookies_file()

@@ -157,7 +157,7 @@ def setup_kaggle_environment():
                     print("  ✓ Loaded cookies.txt from Kaggle User Secrets.")
             except Exception:
                 pass
-        else:
+        if not bundle_root:
             print("\nℹ️ No offline Kaggle dataset attached. Running with dynamic online fetching.")
 
         if not shutil.which("ffmpeg"):
