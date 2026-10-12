@@ -267,6 +267,58 @@ evict_yolo_model = purge_yolo_model
 
 
 # ---------------------------------------------------------------------------
+# Watermark & On-Screen Graphic Filter
+# ---------------------------------------------------------------------------
+
+def is_corner_watermark_or_graphic(
+    box: Union[Tuple[int, int, int, int], List[int], Dict[str, Any]],
+    frame_w: int,
+    frame_h: int
+) -> bool:
+    """
+    Identifies whether a detected bounding box is a corner watermark, channel bug,
+    podcast logo badge, or static on-screen graphic rather than an actual human subject.
+    """
+    if frame_w <= 0 or frame_h <= 0:
+        return False
+
+    if isinstance(box, dict):
+        bx = float(box.get("x", 0))
+        by = float(box.get("y", 0))
+        bw = float(box.get("w", box.get("width", 0)))
+        bh = float(box.get("h", box.get("height", 0)))
+    elif isinstance(box, (tuple, list)) and len(box) >= 4:
+        bx, by, bw, bh = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+    else:
+        return False
+
+    cx = bx + bw / 2.0
+    cy = by + bh / 2.0
+
+    # 1. Bottom Corner Logos / Podcast Badges (e.g. Double Coverage Podcast bug, watermark avatars)
+    if cy > frame_h * 0.58:
+        # Near left or right horizontal border (outer 32% margins)
+        if cx < frame_w * 0.32 or cx > frame_w * 0.68:
+            if bw < frame_w * 0.38 and bh < frame_h * 0.45:
+                return True
+        # Any face located in bottom 28% of frame
+        if cy > frame_h * 0.72 and bh < frame_h * 0.45:
+            return True
+
+    # 2. Top Corner Station Bugs / Channel Watermarks
+    if cy < frame_h * 0.22:
+        if cx < frame_w * 0.22 or cx > frame_w * 0.78:
+            if bw < frame_w * 0.22 and bh < frame_h * 0.25:
+                return True
+
+    # 3. Microscopic noise detections
+    if bh < max(28, int(frame_h * 0.05)) or bw < max(28, int(frame_w * 0.03)):
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Core detection helpers
 # ---------------------------------------------------------------------------
 
@@ -344,15 +396,8 @@ def _detect_yolo(frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
                 if y1 > frame_h * 0.55 or bh < frame_h * 0.20 or bw < 100:
                     continue
 
-                # A merged composite box spanning multiple people sitting side-by-side only occurs
-                # when width spans more than 52% of canvas (>= 1000px on 1080p) AND w/h is significantly wide (>= 1.05).
-                # Normal single-person upper-body shots (even with arms outstretched) must not be split.
-                if bw >= frame_w * 0.52 and (bw / float(bh)) >= 1.05:
-                    half_w = bw // 2
-                    extracted.append((x1, y1, half_w, bh))
-                    extracted.append((x1 + half_w, y1, half_w, bh))
-                else:
-                    extracted.append((x1, y1, bw, bh))
+                # Keep genuine person detection box without artificial bisection
+                extracted.append((x1, y1, bw, bh))
         return extracted
 
     try:
@@ -373,17 +418,19 @@ def detect_faces_or_subjects(frame: np.ndarray, prefer_insightface: bool = True)
     Detects faces/human subjects in a video frame.
     Primary: InsightFace SCRFD with eye/nose landmarks.
     Fallback: YOLOv11 person detection -> Haar Cascade -> empty.
+    Strictly filters out corner watermarks, channel bugs, podcast logos, and stationary avatar graphics.
     """
+    candidates: List[FaceDetection] = []
     if prefer_insightface and _try_load_insightface():
         faces = _detect_insightface(frame)
         if faces:
-            return faces
+            candidates = faces
 
     # Fallback 1: YOLO
-    if _try_load_yolo():
+    if not candidates and _try_load_yolo():
         yolo_boxes = _detect_yolo(frame)
         if yolo_boxes:
-            return [
+            candidates = [
                 FaceDetection(
                     box=b,
                     landmarks=None,
@@ -394,26 +441,36 @@ def detect_faces_or_subjects(frame: np.ndarray, prefer_insightface: bool = True)
             ]
 
     # Fallback 2: OpenCV Haar Cascade
-    try:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        if os.path.isfile(cascade_path):
-            face_cascade = cv2.CascadeClassifier(cascade_path)
-            haar_faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 40))
-            if len(haar_faces) > 0:
-                return [
-                    FaceDetection(
-                        box=(int(x), int(y), int(w), int(h)),
-                        landmarks=None,
-                        landmark_center=(float(x + w / 2.0), float(y + h * 0.4)),
-                        score=0.8
-                    )
-                    for (x, y, w, h) in haar_faces
-                ]
-    except Exception:
-        pass
+    if not candidates:
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            if os.path.isfile(cascade_path):
+                face_cascade = cv2.CascadeClassifier(cascade_path)
+                haar_faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 40))
+                if len(haar_faces) > 0:
+                    candidates = [
+                        FaceDetection(
+                            box=(int(x), int(y), int(w), int(h)),
+                            landmarks=None,
+                            landmark_center=(float(x + w / 2.0), float(y + h * 0.4)),
+                            score=0.8
+                        )
+                        for (x, y, w, h) in haar_faces
+                    ]
+        except Exception:
+            pass
 
-    return []
+    if not candidates:
+        return []
+
+    frame_h, frame_w = frame.shape[:2] if frame is not None and len(frame.shape) >= 2 else (1080, 1920)
+    # Exclude corner watermarks, podcast badge avatars, and stationary graphics
+    valid_faces = [
+        f for f in candidates
+        if not is_corner_watermark_or_graphic(f.box, frame_w, frame_h)
+    ]
+    return valid_faces
 
 
 def detect_subjects(frame: np.ndarray, use_yolo: bool = True) -> List[Tuple[int, int, int, int]]:
@@ -1128,6 +1185,10 @@ def detect_multispeaker_framing(
             if bw < min_face_w or bh < min_face_h or (bw * bh) < (min_face_w * min_face_h):
                 continue
 
+            # Strictly reject corner watermarks, podcast channel bugs, and stationary logos
+            if is_corner_watermark_or_graphic((bx, by, bw, bh), source_w, source_h):
+                continue
+
             cx = bx + bw / 2.0
             cy = by + bh / 2.0
             frame_box_centers.append(cx)
@@ -1184,7 +1245,7 @@ def detect_multispeaker_framing(
     ))
     max_clean_w = max(200, max_clean_w)
 
-    target_h = int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2
+    target_h = int(min(source_h, max(720, int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2)))
     target_w = max(2, int(round(target_h * 9.0 / 8.0 / 2.0)) * 2)
     target_w = max(2, int(target_w // 2) * 2)
     target_h = max(2, int(target_h // 2) * 2)
@@ -1256,6 +1317,7 @@ def calculate_tracking_trajectory(
     speaker_segments: Optional[List[Dict[str, Any]]] = None,
     slice_start_time: float = 0.0,
     scene_cuts: Optional[List[float]] = None,
+    layout_mode: str = "single",
 ) -> Dict[str, Any]:
     """
     Opens a video, samples frames at 1.0-second intervals (sample_step=1.0) and at scene cuts,
@@ -1319,23 +1381,24 @@ def calculate_tracking_trajectory(
     target_crop_w = max(2, min(source_w, target_crop_w))
     center_x = max(0, (source_w - target_crop_w) // 2)
 
-    is_gaming_layout, webcam_region = detect_gaming_layout(video_path)
-    if is_gaming_layout:
-        return {
-            "fps": fps,
-            "frame_count": frame_count,
-            "source_w": source_w,
-            "source_h": source_h,
-            "is_vertical": is_vertical,
-            "x_offsets": [center_x],
-            "sample_timestamps": [0.0],
-            "keyframes": [{"time": 0.0, "x_offset": center_x}],
-            "best_x_offset": center_x,
-            "zoom_keyframes": [],
-            "is_gaming_layout": True,
-            "webcam_region": webcam_region,
-            "scene_cuts": clean_cuts,
-        }
+    if layout_mode == "gaming":
+        is_gaming_layout, webcam_region = detect_gaming_layout(video_path)
+        if is_gaming_layout:
+            return {
+                "fps": fps,
+                "frame_count": frame_count,
+                "source_w": source_w,
+                "source_h": source_h,
+                "is_vertical": is_vertical,
+                "x_offsets": [center_x],
+                "sample_timestamps": [0.0],
+                "keyframes": [{"time": 0.0, "x_offset": center_x}],
+                "best_x_offset": center_x,
+                "zoom_keyframes": [],
+                "is_gaming_layout": True,
+                "webcam_region": webcam_region,
+                "scene_cuts": clean_cuts,
+            }
 
     # For vertical sources, no panning needed — return static center
     if is_vertical:
@@ -1431,15 +1494,15 @@ def calculate_tracking_trajectory(
                     sc = (fd.landmark_center[0] * inv, fd.landmark_center[1] * inv) if fd.landmark_center else None
                     cy = sb[1] + sb[3] / 2.0
                     min_face_dim = max(24, int(source_h * 0.035))
-                    # Suppress false positives on floor, table edge, or microscopic noise
-                    if cy < source_h * 0.75 and sb[2] >= min_face_dim and sb[3] >= min_face_dim:
+                    # Suppress false positives on corner watermarks, floor, table edge, or microscopic noise
+                    if not is_corner_watermark_or_graphic(sb, source_w, source_h) and cy < source_h * 0.72 and sb[2] >= min_face_dim and sb[3] >= min_face_dim:
                         scaled_detections.append(FaceDetection(box=sb, landmarks=None, landmark_center=sc, score=fd.score))
                 face_detections = scaled_detections
             else:
                 min_face_dim = max(24, int(source_h * 0.035))
                 face_detections = [
                     fd for fd in face_detections
-                    if (fd.box[1] + fd.box[3] / 2.0) < source_h * 0.75 and fd.box[2] >= min_face_dim and fd.box[3] >= min_face_dim
+                    if not is_corner_watermark_or_graphic(fd.box, source_w, source_h) and (fd.box[1] + fd.box[3] / 2.0) < source_h * 0.72 and fd.box[2] >= min_face_dim and fd.box[3] >= min_face_dim
                 ]
 
             all_frame_detections.append((timestamp, [fd.box for fd in face_detections]))
@@ -1644,7 +1707,7 @@ def calculate_tracking_trajectory(
                 for b in item[1]:
                     if isinstance(b, (tuple, list)) and len(b) >= 4:
                         bx, by, bw, bh = b[:4]
-                        if bh >= min_real_face_h and bw >= min_real_face_w:
+                        if bh >= min_real_face_h and bw >= min_real_face_w and not is_corner_watermark_or_graphic((bx, by, bw, bh), source_w, source_h):
                             cx = bx + bw / 2.0
                             cy = by + bh / 2.0
                             shot_centers.append(cx)
@@ -1652,9 +1715,11 @@ def calculate_tracking_trajectory(
                     elif isinstance(b, dict):
                         bh = b.get("h", b.get("height", 0))
                         bw = b.get("w", b.get("width", 0))
-                        if bh >= min_real_face_h and bw >= min_real_face_w:
-                            cx = b.get("x", 0) + bw / 2.0
-                            cy = b.get("y", 0) + bh / 2.0
+                        bx = b.get("x", 0)
+                        by = b.get("y", 0)
+                        if bh >= min_real_face_h and bw >= min_real_face_w and not is_corner_watermark_or_graphic((bx, by, bw, bh), source_w, source_h):
+                            cx = bx + bw / 2.0
+                            cy = by + bh / 2.0
                             shot_centers.append(cx)
                             shot_points.append((cx, cy))
             elif isinstance(item, dict) and "center" in item:
@@ -1725,7 +1790,7 @@ def calculate_tracking_trajectory(
 
                 midpoint = source_w / 2.0
                 max_clean_w = max(200, min(midpoint * 0.95, (midpoint - med_l) * 1.75, (med_r - midpoint) * 1.75, source_w * 0.38))
-                t_h = max(2, int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2)
+                t_h = int(min(source_h, max(720, int(round(max_clean_w * 8.0 / 9.0 / 2.0)) * 2)))
                 t_w = max(2, int(round(t_h * 9.0 / 8.0 / 2.0)) * 2)
                 x_a = max(0, min(int(round(med_l - t_w / 2.0)), int(midpoint - t_w)))
                 x_b = max(int(midpoint), min(int(round(med_r - t_w / 2.0)), source_w - t_w))
@@ -1871,7 +1936,8 @@ def calculate_tracking_trajectory(
             })
 
     # If the slice has multiple shots or contains non-single layouts (blur_box or split_stack):
-    if (len(shot_intervals) > 1 or has_any_blur_box_shot or has_any_split_shot) and shot_timeline:
+    # Only return multi-stream director timeline if caller explicitly requested multi-speaker/split layouts
+    if layout_mode in ("split_stack", "director_multizone") and (len(shot_intervals) > 1 or has_any_blur_box_shot or has_any_split_shot) and shot_timeline:
         # Merge adjacent truly identical shots
         merged_timeline: List[Dict[str, Any]] = []
         for s in shot_timeline:

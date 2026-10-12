@@ -747,7 +747,7 @@ def build_ffmpeg_command(
                 f"[vid_raw]fps=30,setpts=PTS-STARTPTS,"
                 f"{eq_filter},"
                 f"scale=-2:{target_box_h},"
-                f"crop={target_box_w}:{target_box_h}:{x_crop_expr}:0"
+                f"crop={target_box_w}:{target_box_h}:'{x_crop_expr}':0"
             )
 
             if zoom_kfs:

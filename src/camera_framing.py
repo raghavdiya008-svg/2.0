@@ -259,9 +259,13 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         except Exception as e:
             logger.debug(f"[camera_framing] Haar detection error: {e}")
 
-    # Filter out tiny spurious detections (less than 12% frame height)
+    # Filter out tiny spurious detections (less than 12% frame height) and corner watermarks/graphics
+    from engine_vision import is_corner_watermark_or_graphic
     min_h = max(70, int(sh * 0.12))
-    valid_faces = [f for f in all_face_dets if f.box[3] >= min_h]
+    valid_faces = [
+        f for f in all_face_dets 
+        if f.box[3] >= min_h and not is_corner_watermark_or_graphic(f.box, sw, sh)
+    ]
 
     # Cluster detections into Left (Host) and Right (Guest)
     left_faces = []
@@ -271,6 +275,10 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
 
     for f in valid_faces:
         cx = f.landmark_center[0] if getattr(f, "landmark_center", None) is not None else (f.box[0] + f.box[2] / 2.0)
+        cy = f.landmark_center[1] if getattr(f, "landmark_center", None) is not None else (f.box[1] + f.box[3] / 2.0)
+        # Real speaker faces in podcasts are in the upper/mid conversation area (cy < 0.65 * sh)
+        if cy > sh * 0.65:
+            continue
         if cx < left_bound:
             left_faces.append(f)
         elif cx > right_bound:
@@ -322,7 +330,12 @@ def suggest_camera_zones(video_path: str) -> CameraFramingConfig:
         )
 
     elif valid_faces:
-        f0 = valid_faces[0]
+        real_speaker_faces = [
+            f for f in valid_faces
+            if ((f.landmark_center[1] if getattr(f, "landmark_center", None) is not None else (f.box[1] + f.box[3] / 2.0)) < sh * 0.68)
+        ]
+        chosen_faces = real_speaker_faces if real_speaker_faces else valid_faces
+        f0 = max(chosen_faces, key=lambda f: f.box[2] * f.box[3])
         hz = _box_to_zone(
             "zone_host", "Solo Speaker", f0.box, sw, sh,
             speaker="SPEAKER_00", color="#3b82f6",

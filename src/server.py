@@ -672,13 +672,13 @@ def _run_render_job(job_data, **kwargs):
         if not traj.get("shot_timeline") and not traj.get("layout"):
             try:
                 import engine_vision
-                traj = engine_vision.calculate_tracking_trajectory(active_input_path)
+                traj = engine_vision.calculate_tracking_trajectory(active_input_path, layout_mode=layout_mode)
             except Exception as e:
                 logger.warning(f"[server] engine_vision trajectory calculation failed: {e}")
                 traj = {}
 
-            # Only consult TV Director for split_stack if layout_mode is explicitly 'split_stack' or 'auto'
-            if (layout_mode in ("split_stack", "auto")) and (job_data.get("layout") == "director_multizone" or traj.get("is_dual_speaker")) and not traj.get("shot_timeline"):
+            # Only consult TV Director for split_stack if layout_mode is explicitly 'split_stack'
+            if layout_mode == "split_stack" and (job_data.get("layout") == "director_multizone" or traj.get("is_dual_speaker")) and not traj.get("shot_timeline"):
                 saved_cfg = camera_framing.CameraFramingConfig.load(video_filename) or camera_framing.CameraFramingConfig.load(base)
                 if saved_cfg and saved_cfg.zones and saved_cfg.mode != "solo":
                     try:
@@ -689,33 +689,21 @@ def _run_render_job(job_data, **kwargs):
                     except Exception as e:
                         logger.warning(f"[server] Auto TV director fallback: {e}")
 
-        # CRITICAL FAILSAFE: If user chose "single" layout (default), guarantee NO split_stack is ever rendered!
-        if layout_mode == "single" and traj.get("shot_timeline"):
-            cleaned_timeline = []
-            for s in traj["shot_timeline"]:
-                if s.get("type") == "split_stack":
-                    chosen = s.get("bot_zone") or s.get("top_zone") or {}
-                    src_h = traj.get("source_h", 1080)
-                    target_w = max(2, int(round(src_h * 9.0 / 16.0 / 2.0)) * 2)
-                    s_clean = {
-                        "start": s.get("start", 0.0),
-                        "end": s.get("end", dur_f),
-                        "type": "single",
-                        "camera": chosen.get("id", "zone_host"),
-                        "zone": {
-                            "id": chosen.get("id", "zone_host"),
-                            "label": chosen.get("label", "Active Speaker"),
-                            "x": chosen.get("x", 0),
-                            "y": 0,
-                            "width": target_w,
-                            "height": src_h
-                        }
-                    }
-                    cleaned_timeline.append(s_clean)
-                else:
-                    cleaned_timeline.append(s)
-            traj["shot_timeline"] = cleaned_timeline
+        # CRITICAL FAILSAFE: If user chose "single" layout (default), guarantee full-screen 9:16 portrait tracking
+        if layout_mode == "single":
+            job_data["layout"] = "single"
+            traj.pop("shot_timeline", None)
+            traj["layout"] = "single"
             traj["is_dual_speaker"] = False
+            # Ensure valid smooth panning offsets exist
+            if not traj.get("x_offsets") or len(traj.get("x_offsets", [])) <= 1:
+                try:
+                    import engine_vision
+                    single_traj = engine_vision.calculate_tracking_trajectory(active_input_path, layout_mode="single")
+                    if single_traj.get("x_offsets") and len(single_traj.get("x_offsets", [])) > 1:
+                        traj = single_traj
+                except Exception as e:
+                    logger.debug(f"[server] Single trajectory regeneration fallback: {e}")
         job_data["trajectory"] = traj
         try:
             import torch

@@ -884,7 +884,7 @@
                 setRenderedClipResult(null);
                 try {
                     const words = previewClip.words || (ingestData?.transcript?.words || []);
-                    const isDualShot = previewShots && previewShots.some(s => s.type === 'split_stack');
+                    const isSplitMode = (layoutMode === 'split_stack');
                     const payload = {
                         video: selectedVideo,
                         start: previewClip.start,
@@ -895,10 +895,11 @@
                         title_y: extraParams.title_y || previewClip.title_y || 130,
                         margin_v: extraParams.margin_v || previewClip.margin_v || 440,
                         delete_title: Boolean(extraParams.delete_title),
-                        trajectory: {
+                        layout_mode: layoutMode || 'single',
+                        trajectory: isSplitMode ? {
                             layout: 'director_multizone',
                             shot_timeline: previewShots
-                        },
+                        } : null,
                         words: words,
                         file_slug: previewClip.file_slug,
                         output_filename: previewClip.output_filename,
@@ -1731,6 +1732,26 @@
                                                     <Icon name="check-square" className="w-3.5 h-3.5" />
                                                     Select Only Batch #{currentBatch + 1} ({currentBatchClipsIndices.length})
                                                 </button>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={handleStartBatchRender}
+                                                    disabled={isRenderingBatch || selectedClipIndices.length === 0}
+                                                    className="px-4 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-extrabold rounded-xl text-xs shadow-md shadow-blue-500/20 flex items-center gap-1.5 transition active:scale-95"
+                                                    title="Start rendering selected clips immediately"
+                                                >
+                                                    {isRenderingBatch ? (
+                                                        <>
+                                                            <Icon name="loader-2" className="w-3.5 h-3.5 animate-spin" />
+                                                            Rendering...
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <Icon name="video" className="w-3.5 h-3.5" />
+                                                            🚀 Render Selected ({selectedClipIndices.filter(i => i < curatedClips.length).length})
+                                                        </>
+                                                    )}
+                                                </button>
                                             </div>
                                         </div>
 
@@ -1921,30 +1942,30 @@
                             })()}
 
                             {/* Batch Render Control Bar */}
-                            <div className="sticky bottom-6 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-4 z-40">
-                                <div className="flex items-center gap-4">
-                                    <span className="text-sm font-bold text-white">
+                            <div className="sticky bottom-4 md:bottom-6 bg-slate-900/98 backdrop-blur-xl border border-slate-700/80 rounded-2xl p-4 md:p-5 shadow-2xl flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4 z-40 ring-1 ring-white/10">
+                                <div className="flex items-center flex-wrap gap-2.5 sm:gap-3.5 flex-1 min-w-0">
+                                    <span className="text-sm font-bold text-white whitespace-nowrap bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800">
                                         Selected: <span className="text-blue-400 font-mono text-base">{selectedClipIndices.filter(i => i < curatedClips.length).length}</span> of {curatedClips.length} clips
                                     </span>
 
                                     {/* Speed Factor */}
-                                    <div className="flex items-center gap-1.5 text-xs">
+                                    <div className="flex items-center gap-1.5 text-xs bg-slate-950/80 border border-slate-800 px-2.5 py-1.5 rounded-xl">
                                         <span className="text-slate-400">Speed:</span>
                                         <select
                                             value={renderSpeed}
                                             onChange={(e) => setRenderSpeed(parseFloat(e.target.value))}
-                                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-white font-mono text-xs focus:outline-none"
+                                            className="bg-transparent text-white font-mono text-xs focus:outline-none cursor-pointer"
                                         >
-                                            <option value={1.0}>1.0x (Normal / Zero Drift)</option>
-                                            <option value={1.08}>1.08x (Subtle)</option>
-                                            <option value={1.10}>1.10x (Fast)</option>
-                                            <option value={1.12}>1.12x (High)</option>
-                                            <option value={1.15}>1.15x (Ultra)</option>
+                                            <option value={1.0} className="bg-slate-900">1.0x (Normal / Zero Drift)</option>
+                                            <option value={1.08} className="bg-slate-900">1.08x (Subtle)</option>
+                                            <option value={1.10} className="bg-slate-900">1.10x (Fast)</option>
+                                            <option value={1.12} className="bg-slate-900">1.12x (High)</option>
+                                            <option value={1.15} className="bg-slate-900">1.15x (Ultra)</option>
                                         </select>
                                     </div>
 
                                     {/* Layout Mode Selector */}
-                                    <div className="flex items-center gap-1.5 text-xs bg-slate-950/80 border border-slate-800 px-2.5 py-1 rounded-xl">
+                                    <div className="flex items-center gap-1.5 text-xs bg-slate-950/80 border border-slate-800 px-2.5 py-1.5 rounded-xl">
                                         <span className="text-slate-400">Layout:</span>
                                         <select
                                             value={layoutMode || 'single'}
@@ -1958,7 +1979,7 @@
                                     </div>
 
                                     {/* Global Title Y position slider */}
-                                    <div className="hidden lg:flex items-center gap-2 text-xs bg-slate-950/70 border border-slate-800/80 px-2.5 py-1 rounded-xl">
+                                    <div className="flex items-center gap-2 text-xs bg-slate-950/70 border border-slate-800/80 px-2.5 py-1.5 rounded-xl">
                                         <span className="text-slate-400">Title Y:</span>
                                         <input
                                             type="range"
@@ -1967,13 +1988,13 @@
                                             step="10"
                                             value={globalTitleY || 130}
                                             onChange={(e) => setGlobalTitleY(parseInt(e.target.value))}
-                                            className="w-16 h-1 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
+                                            className="w-14 sm:w-16 h-1 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
                                         />
                                         <span className="font-mono text-blue-400 font-bold text-[11px]">{globalTitleY || 130}px</span>
                                     </div>
 
                                     {/* Global Subtitle Margin V position slider */}
-                                    <div className="hidden lg:flex items-center gap-2 text-xs bg-slate-950/70 border border-slate-800/80 px-2.5 py-1 rounded-xl">
+                                    <div className="flex items-center gap-2 text-xs bg-slate-950/70 border border-slate-800/80 px-2.5 py-1.5 rounded-xl">
                                         <span className="text-slate-400">Subtitle Y:</span>
                                         <input
                                             type="range"
@@ -1982,10 +2003,10 @@
                                             step="20"
                                             value={globalMarginV || 440}
                                             onChange={(e) => setGlobalMarginV(parseInt(e.target.value))}
-                                            className="w-16 h-1 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
+                                            className="w-14 sm:w-16 h-1 bg-slate-800 rounded-lg accent-blue-500 cursor-pointer"
                                         />
                                         <span className="font-mono text-blue-400 font-bold text-[11px]">
-                                            {globalMarginV === 440 ? '440px (Safe Lower-Third)' : `${globalMarginV || 440}px`}
+                                            {globalMarginV === 440 ? '440px (Safe)' : `${globalMarginV || 440}px`}
                                         </span>
                                     </div>
 
@@ -1993,7 +2014,7 @@
                                     <button
                                         type="button"
                                         onClick={onOpenWatermarkModal}
-                                        className={`px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border ${
+                                        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border ${
                                             watermarkPreset1?.enabled
                                                 ? 'bg-blue-600/20 text-blue-300 border-blue-500/50 hover:bg-blue-600/30'
                                                 : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
@@ -2008,16 +2029,16 @@
                                     </button>
 
                                     {/* BGM Soundtrack & Ducking Selector */}
-                                    <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 px-2.5 py-1 rounded-xl text-xs">
+                                    <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 px-2.5 py-1.5 rounded-xl text-xs">
                                         <span className="text-slate-400 flex items-center gap-1">
                                             <span>🎵</span> BGM:
                                         </span>
                                         <select
                                             value={selectedBgmTrack || ''}
                                             onChange={(e) => setSelectedBgmTrack(e.target.value)}
-                                            className="bg-transparent text-white font-mono text-xs focus:outline-none cursor-pointer max-w-[130px] truncate"
+                                            className="bg-transparent text-white font-mono text-xs focus:outline-none cursor-pointer max-w-[120px] truncate"
                                         >
-                                            <option value="" className="bg-slate-900">None (Dialogue Only)</option>
+                                            <option value="" className="bg-slate-900">None</option>
                                             {bgmTracks && bgmTracks.map(track => (
                                                 <option key={track} value={track} className="bg-slate-900">{track}</option>
                                             ))}
@@ -2031,8 +2052,8 @@
                                                     step="0.02"
                                                     value={bgmVolume}
                                                     onChange={(e) => setBgmVolume(parseFloat(e.target.value))}
-                                                    className="w-12 h-1 bg-slate-800 rounded-lg accent-indigo-500 cursor-pointer"
-                                                    title={`BGM Volume: Math.round(bgmVolume * 100)%`}
+                                                    className="w-10 sm:w-12 h-1 bg-slate-800 rounded-lg accent-indigo-500 cursor-pointer"
+                                                    title={`BGM Volume: ${Math.round(bgmVolume * 100)}%`}
                                                 />
                                                 <span className="font-mono text-indigo-400 text-[10px] font-bold">
                                                     {Math.round(bgmVolume * 100)}%
@@ -2050,11 +2071,12 @@
                                     </div>
                                 </div>
 
-                                <div className="flex items-center gap-3 w-full md:w-auto">
+                                {/* Right: Action buttons (Save JSON + Render Button) */}
+                                <div className="flex items-center gap-3 w-full xl:w-auto justify-end shrink-0 pt-3 xl:pt-0 border-t xl:border-t-0 border-slate-800/80">
                                     <button
                                         type="button"
                                         onClick={onDownloadJson}
-                                        className="px-3.5 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+                                        className="px-4 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-95 shrink-0"
                                         title="Download full curated JSON to save your progress"
                                     >
                                         <Icon name="download" className="w-4 h-4 text-blue-400" />
@@ -2064,7 +2086,7 @@
                                     <button
                                         onClick={handleStartBatchRender}
                                         disabled={isRenderingBatch || selectedClipIndices.length === 0}
-                                        className="w-full md:w-auto px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-sm shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition active:scale-[0.99]"
+                                        className="w-full sm:w-auto min-w-[230px] px-7 py-3.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-extrabold rounded-xl text-sm shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2.5 transition active:scale-[0.99] shrink-0 border border-blue-400/30 ring-2 ring-blue-500/20 cursor-pointer"
                                     >
                                         {isRenderingBatch ? (
                                             <>
@@ -2073,8 +2095,8 @@
                                             </>
                                         ) : (
                                             <>
-                                                <Icon name="video" className="w-4 h-4" />
-                                                Render Selected Clips ({selectedClipIndices.filter(i => i < curatedClips.length).length})
+                                                <Icon name="video" className="w-4 h-4 text-blue-200" />
+                                                <span>🚀 Render Selected Clips ({selectedClipIndices.filter(i => i < curatedClips.length).length})</span>
                                             </>
                                         )}
                                     </button>
