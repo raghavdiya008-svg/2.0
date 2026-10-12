@@ -634,11 +634,13 @@ class SmoothGlideTracker:
         ewma_alpha: float = 0.18,
         deadband: float = 16.0,
         max_velocity: float = 180.0,
+        anchor_x: Optional[float] = None,
     ):
         self.source_w = source_w
         self.target_crop_w = target_crop_w
         self.max_x = max(0, source_w - target_crop_w)
-        self.neutral_x = self.max_x // 2
+        self.neutral_x = int(round(anchor_x)) if anchor_x is not None else (self.max_x // 2)
+        self.last_valid_x = float(self.neutral_x)
         self.dt = dt
         self.alpha = ewma_alpha
         self.deadband = deadband
@@ -661,9 +663,10 @@ class SmoothGlideTracker:
 
     def reset(self, new_x: Optional[float] = None) -> None:
         """Resets tracker state instantaneously for scene cuts."""
-        reset_pos = new_x if new_x is not None else float(self.neutral_x)
+        reset_pos = new_x if new_x is not None else float(getattr(self, "last_valid_x", self.neutral_x))
         reset_pos = max(0.0, min(float(self.max_x), float(reset_pos)))
         self.x = reset_pos
+        self.last_valid_x = reset_pos
         self.v = 0.0
         self.p00 = 50.0
         self.p01 = 0.0
@@ -698,6 +701,7 @@ class SmoothGlideTracker:
         if target_pan_x is not None:
             self.frames_without_detection = 0
             meas_x = max(0.0, min(float(self.max_x), float(target_pan_x)))
+            self.last_valid_x = meas_x
 
             # Deadband check: if within deadband of current position, suppress jitter
             if abs(meas_x - self.x) < self.deadband:
@@ -720,23 +724,15 @@ class SmoothGlideTracker:
             self.p11 = -k1 * p01_pred + p11_pred
 
         else:
-            # Subject stepped out of view or undetected
+            # Subject stepped out of view or face temporarily turned away:
+            # Broadcast camera discipline: HOLD the shot on the speaker!
+            # Decay pan velocity to zero and maintain last valid speaker framing.
+            # Never pull the camera away to film empty background walls between chairs.
             self.frames_without_detection += 1
-
-            if self.frames_without_detection <= 2:
-                # Brief absence (step out or turn around): coast with decaying momentum
-                self.v *= 0.70
-                self.x = x_pred
-            else:
-                # Prolonged absence: gracefully glide towards neutral center
-                dist_to_center = self.neutral_x - self.x
-                glide_dir = 1.0 if dist_to_center > 0 else -1.0
-                glide_speed = min(45.0, abs(dist_to_center) * 0.35)
-                self.v = glide_dir * glide_speed
-                self.x += self.v * step
-                if abs(self.neutral_x - self.x) < 4.0:
-                    self.x = float(self.neutral_x)
-                    self.v = 0.0
+            self.v *= 0.50
+            if abs(self.v) < 1.0:
+                self.v = 0.0
+            self.x = max(0.0, min(float(self.max_x), self.x + self.v * step))
 
             self.p00 = p00_pred
             self.p01 = p01_pred
@@ -1437,6 +1433,31 @@ def calculate_tracking_trajectory(
     has_any_detection = False
     
     speaker_to_box_idx: Dict[str, int] = {}
+
+    # Pre-probe keyframe samples across clip to determine initial anchor speaker position
+    initial_anchor_x = None
+    try:
+        probe_cap = cv2.VideoCapture(video_path)
+        if probe_cap.isOpened():
+            probe_total = int(probe_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            probe_candidates = []
+            for ratio in [0.08, 0.20, 0.40, 0.65, 0.85]:
+                fno = int(probe_total * ratio)
+                if fno < probe_total:
+                    probe_cap.set(cv2.CAP_PROP_POS_FRAMES, fno)
+                    p_ret, p_frame = probe_cap.read()
+                    if p_ret and p_frame is not None:
+                        p_dets = detect_faces_or_subjects(p_frame)
+                        for d in p_dets:
+                            cx = d.landmark_center[0] if getattr(d, "landmark_center", None) is not None else (d.box[0] + d.box[2] / 2.0)
+                            probe_candidates.append(cx)
+            probe_cap.release()
+            if probe_candidates:
+                med_cx = statistics.median(probe_candidates)
+                initial_anchor_x = max(0, min(source_w - target_crop_w, int(med_cx - target_crop_w / 2.0)))
+    except Exception as e:
+        logger.debug(f"[engine_vision] Probe anchor check error: {e}")
+
     tracker = SmoothGlideTracker(
         source_w=source_w,
         target_crop_w=target_crop_w,
@@ -1444,6 +1465,7 @@ def calculate_tracking_trajectory(
         ewma_alpha=alpha,
         deadband=16.0,
         max_velocity=180.0,
+        anchor_x=initial_anchor_x,
     )
 
     while True:
@@ -1779,6 +1801,8 @@ def calculate_tracking_trajectory(
         elif median_faces >= 2:
             left_points = [(cx, cy) for (cx, cy) in shot_points if cx < source_w * 0.48]
             right_points = [(cx, cy) for (cx, cy) in shot_points if cx > source_w * 0.52]
+            left_centers = [cx for (cx, cy) in shot_points if cx < source_w * 0.48]
+            right_centers = [cx for (cx, cy) in shot_points if cx > source_w * 0.52]
 
             # Require confirmed human subjects on both sides (at least 3 sample points each)
             if left_points and right_points and len(left_points) >= 3 and len(right_points) >= 3:
@@ -1806,11 +1830,13 @@ def calculate_tracking_trajectory(
                     "camera": "podcast_split",
                     "top_zone": {
                         "id": "zone_top", "label": "Host",
-                        "x": int(x_a // 2) * 2, "y": int(y_a // 2) * 2, "width": t_w, "height": t_h
+                        "x": int(x_a // 2) * 2, "y": int(y_a // 2) * 2, "width": t_w, "height": t_h,
+                        "center_x": int(round(med_l)),
                     },
                     "bot_zone": {
                         "id": "zone_bot", "label": "Guest",
-                        "x": int(x_b // 2) * 2, "y": int(y_b // 2) * 2, "width": t_w, "height": t_h
+                        "x": int(x_b // 2) * 2, "y": int(y_b // 2) * 2, "width": t_w, "height": t_h,
+                        "center_x": int(round(med_r)),
                     }
                 })
             else:
@@ -1936,8 +1962,14 @@ def calculate_tracking_trajectory(
             })
 
     # If the slice has multiple shots or contains non-single layouts (blur_box or split_stack):
-    # Only return multi-stream director timeline if caller explicitly requested multi-speaker/split layouts
-    if layout_mode in ("split_stack", "director_multizone") and (len(shot_intervals) > 1 or has_any_blur_box_shot or has_any_split_shot) and shot_timeline:
+    # Return dynamic shot timeline if:
+    # 1. Caller requested multi-speaker / split layouts, OR
+    # 2. Slice contains B-roll / presentation slides (has_any_blur_box_shot) so 16:9 text isn't cut off in 9:16
+    should_use_timeline = bool(shot_timeline) and (
+        (layout_mode in ("split_stack", "director_multizone") and (len(shot_intervals) > 1 or has_any_blur_box_shot or has_any_split_shot))
+        or has_any_blur_box_shot
+    )
+    if should_use_timeline:
         # Merge adjacent truly identical shots
         merged_timeline: List[Dict[str, Any]] = []
         for s in shot_timeline:
@@ -1962,6 +1994,33 @@ def calculate_tracking_trajectory(
         if merged_timeline:
             merged_timeline[0]["start"] = 0.0
             merged_timeline[-1]["end"] = round(clip_total_dur, 2)
+
+        # In single layout mode, convert any split_stack shots into single (active speaker zone)
+        # while keeping blur_box shots for slides
+        if layout_mode == "single":
+            cleaned_timeline: List[Dict[str, Any]] = []
+            for s in merged_timeline:
+                if s["type"] == "split_stack":
+                    chosen = s.get("top_zone") or s.get("bot_zone") or {}
+                    cx = chosen.get("center_x", chosen.get("x", 0) + chosen.get("width", target_crop_w) / 2.0)
+                    sx = max(0, min(int(round(cx - target_crop_w / 2.0)), source_w - target_crop_w))
+                    cleaned_timeline.append({
+                        "start": s["start"],
+                        "end": s["end"],
+                        "type": "single",
+                        "camera": "solo",
+                        "zone": {
+                            "id": "zone_solo",
+                            "label": chosen.get("label", "Active Speaker"),
+                            "x": sx,
+                            "y": 0,
+                            "width": target_crop_w,
+                            "height": source_h,
+                        }
+                    })
+                else:
+                    cleaned_timeline.append(s)
+            merged_timeline = cleaned_timeline
 
         print(
             f"[engine_vision] Shot-aware dynamic timeline generated | {len(merged_timeline)} shot(s) | "
@@ -1998,7 +2057,7 @@ def calculate_tracking_trajectory(
             "source_w": source_w,
             "source_h": source_h,
             "is_vertical": False,
-            "is_dual_speaker": True,
+            "is_dual_speaker": layout_mode != "single" and any(s["type"] == "split_stack" for s in merged_timeline),
             "layout": "director_multizone",
             "shot_timeline": merged_timeline,
             "x_offsets": [center_x],

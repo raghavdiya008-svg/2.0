@@ -689,21 +689,64 @@ def _run_render_job(job_data, **kwargs):
                     except Exception as e:
                         logger.warning(f"[server] Auto TV director fallback: {e}")
 
-        # CRITICAL FAILSAFE: If user chose "single" layout (default), guarantee full-screen 9:16 portrait tracking
+        # CRITICAL FAILSAFE: If user chose "single" layout (default):
+        # 1. Guarantee NO split_stack layout is rendered (convert any split_stack shots into single portrait).
+        # 2. Preserve blur_box shots if present (so 16:9 slides/graphics aren't truncated).
+        # 3. If no blur_box shots exist, use smooth continuous single-camera tracking.
         if layout_mode == "single":
-            job_data["layout"] = "single"
-            traj.pop("shot_timeline", None)
-            traj["layout"] = "single"
-            traj["is_dual_speaker"] = False
-            # Ensure valid smooth panning offsets exist
-            if not traj.get("x_offsets") or len(traj.get("x_offsets", [])) <= 1:
-                try:
-                    import engine_vision
-                    single_traj = engine_vision.calculate_tracking_trajectory(active_input_path, layout_mode="single")
-                    if single_traj.get("x_offsets") and len(single_traj.get("x_offsets", [])) > 1:
-                        traj = single_traj
-                except Exception as e:
-                    logger.debug(f"[server] Single trajectory regeneration fallback: {e}")
+            if traj.get("shot_timeline"):
+                has_blur_box = any(s.get("type") == "blur_box" for s in traj["shot_timeline"])
+                if has_blur_box:
+                    cleaned_timeline = []
+                    src_h = traj.get("source_h", 1080)
+                    target_w = max(2, int(round(src_h * 9.0 / 16.0 / 2.0)) * 2)
+                    for s in traj["shot_timeline"]:
+                        if s.get("type") == "split_stack":
+                            chosen = s.get("top_zone") or s.get("bot_zone") or {}
+                            src_w = traj.get("source_w", 1920)
+                            cx = chosen.get("center_x", chosen.get("x", 0) + chosen.get("width", target_w) / 2.0)
+                            sx = max(0, min(int(round(cx - target_w / 2.0)), src_w - target_w))
+                            cleaned_timeline.append({
+                                "start": s.get("start", 0.0),
+                                "end": s.get("end", dur_f),
+                                "type": "single",
+                                "camera": chosen.get("id", "zone_host"),
+                                "zone": {
+                                    "id": chosen.get("id", "zone_host"),
+                                    "label": chosen.get("label", "Active Speaker"),
+                                    "x": sx,
+                                    "y": 0,
+                                    "width": target_w,
+                                    "height": src_h
+                                }
+                            })
+                        else:
+                            cleaned_timeline.append(s)
+                    traj["shot_timeline"] = cleaned_timeline
+                    traj["layout"] = "director_multizone"
+                    job_data["layout"] = "director_multizone"
+                    traj["is_dual_speaker"] = False
+                else:
+                    # Pure talking head — safe to use continuous single tracking
+                    job_data["layout"] = "single"
+                    traj.pop("shot_timeline", None)
+                    traj["layout"] = "single"
+                    traj["is_dual_speaker"] = False
+            else:
+                job_data["layout"] = "single"
+                traj["layout"] = "single"
+                traj["is_dual_speaker"] = False
+
+            if not traj.get("shot_timeline"):
+                # Ensure valid smooth panning offsets exist
+                if not traj.get("x_offsets") or len(traj.get("x_offsets", [])) <= 1:
+                    try:
+                        import engine_vision
+                        single_traj = engine_vision.calculate_tracking_trajectory(active_input_path, layout_mode="single")
+                        if single_traj.get("x_offsets") and len(single_traj.get("x_offsets", [])) > 1:
+                            traj = single_traj
+                    except Exception as e:
+                        logger.debug(f"[server] Single trajectory regeneration fallback: {e}")
         job_data["trajectory"] = traj
         try:
             import torch
