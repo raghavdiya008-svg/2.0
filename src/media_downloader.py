@@ -24,6 +24,15 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_SRC_DIR, ".."))
 INPUTS_DIR = os.path.join(_PROJECT_ROOT, "inputs")
 
 
+def _safe_print(msg: str):
+    """Safely prints UTF-8 strings without charmap / cp1252 exceptions on Windows."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        safe_msg = msg.encode("ascii", errors="replace").decode("ascii")
+        print(safe_msg)
+
+
 def _ytdlp_cmd() -> list:
     """
     Returns the correct command prefix for yt-dlp.
@@ -98,16 +107,17 @@ def _find_cookies_file() -> Optional[str]:
 def _ytdlp_extra_args() -> list:
     """
     Returns extra resilience flags for yt-dlp.
-    Injects VisionOS client to bypass bot-detection and SABR format drops on cloud VMs (Kaggle/Colab).
-    Injects cookies.txt automatically when present.
+    Injects resilient multi-client chain (visionos, web) with cookies and Node.js challenge solving.
     """
     extra = [
-        "--extractor-args", "youtube:player_client=visionos",
+        "--extractor-args", "youtube:player_client=visionos,web",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--no-check-certificates",
         "--retries", "3",
         "--fragment-retries", "3",
     ]
+    if shutil.which("node"):
+        extra += ["--js-runtimes", "node"]
     cookies_path = _find_cookies_file()
     if cookies_path:
         extra += ["--cookies", cookies_path]
@@ -308,36 +318,22 @@ def download_youtube_video(
     os.makedirs(output_dir, exist_ok=True)
     v_id = extract_youtube_id(url)
 
-    # ── Step 1: Probe metadata (HTML scrape first, then yt-dlp android client) ──
-    title = _scrape_youtube_title(url) or "youtube_video"
+    # ── Step 1: Probe metadata (HTML scrape first, lightweight, never hammer yt-dlp) ──
+    title = _scrape_youtube_title(url) or ""
+    if not title:
+        title = f"youtube_{v_id}" if v_id else "youtube_video"
     duration = 0.0
-
-    # If title is still default, try yt-dlp metadata probe with android client
-    if title == "youtube_video":
-        try:
-            result = subprocess.run(
-                _ytdlp_cmd() + _ytdlp_extra_args() + [
-                    "--no-playlist", "--print", "%(title)s\t%(duration)s", "--no-download", url
-                ],
-                capture_output=True, text=True, timeout=25
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                parts = result.stdout.strip().split("\t")
-                title = parts[0].strip() if parts else title
-                duration = float(parts[1].strip()) if len(parts) > 1 else 0.0
-        except Exception as e:
-            logger.debug(f"[media_downloader] Metadata pre-check non-fatal: {e}")
 
     # ── Step 2: Check cache / pre-loaded files before making network download ──
     cached_file = _find_cached_video(output_dir, title=title, v_id=v_id)
     if cached_file and os.path.isfile(cached_file) and os.path.getsize(cached_file) > 1024 * 1024:
         final_dur = duration or _probe_duration(cached_file)
         w, h = _probe_resolution(cached_file)
-        print(f"[media_downloader] Reusing cached/pre-loaded file: {cached_file} ({final_dur:.1f}s, {w}x{h}) — skipping network download.")
+        _safe_print(f"[media_downloader] Reusing cached/pre-loaded file: {cached_file} ({final_dur:.1f}s, {w}x{h}) — skipping network download.")
         return {
             "file_path": cached_file,
             "file_name": os.path.basename(cached_file),
-            "title": title if title != "youtube_video" else os.path.splitext(os.path.basename(cached_file))[0],
+            "title": title if not title.startswith("youtube_") else os.path.splitext(os.path.basename(cached_file))[0],
             "duration": final_dur,
             "width": w,
             "height": h,
@@ -346,9 +342,12 @@ def download_youtube_video(
         }
 
     safe_base = sanitize_filename(title)
+    if (safe_base == "youtube_video" or not safe_base) and v_id:
+        safe_base = f"youtube_{v_id}"
     safe_filename = os.path.join(output_dir, f"{safe_base}.mp4")
+    outtmpl_pattern = os.path.join(output_dir, f"{safe_base}.%(ext)s")
 
-    print(f"[media_downloader] Downloading YouTube video: {url}")
+    _safe_print(f"[media_downloader] Downloading YouTube video: {url}")
 
     # Helper for yt-dlp download progress hooks
     def _yt_hook(d):
@@ -392,14 +391,16 @@ def download_youtube_video(
         ydl_opts = {
             "format": format_spec,
             "merge_output_format": "mp4",
-            "outtmpl": safe_filename,
+            "outtmpl": outtmpl_pattern,
             "noplaylist": True,
             "quiet": False,
             "no_warnings": False,
-            "extractor_args": {"youtube": {"player_client": ["visionos"]}},
+            "extractor_args": {"youtube": {"player_client": ["visionos", "web"]}},
             "nocheckcertificate": True,
             "progress_hooks": [_yt_hook],
         }
+        if shutil.which("node"):
+            ydl_opts["js_runtimes"] = {"node": {}}
         if cookies_path:
             ydl_opts["cookiefile"] = cookies_path
             logger.info(f"[media_downloader] Using cookies file: {cookies_path}")
@@ -415,7 +416,7 @@ def download_youtube_video(
                 resolved = ydl.prepare_filename(info)
                 for ext in (".webm", ".mkv", ".m4a"):
                     resolved = resolved.replace(ext, ".mp4")
-                if os.path.isfile(resolved) and resolved != safe_filename:
+                if os.path.isfile(resolved):
                     safe_filename = resolved
 
         # Verify output file (check .mp4, .mkv, .webm)
@@ -440,29 +441,31 @@ def download_youtube_video(
 
         if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0:
             _downloaded_ok = True
-            print(f"[media_downloader] Python API download complete: {safe_filename}")
+            _safe_print(f"[media_downloader] Python API download complete: {safe_filename}")
 
     except ImportError:
         logger.warning("[media_downloader] yt_dlp not importable — falling back to subprocess.")
     except Exception as e:
         last_error_msg = str(e)
-        logger.warning(f"[media_downloader] yt-dlp primary error ({e}) — attempting VisionOS / web_embedded client fallback.")
+        logger.warning(f"[media_downloader] yt-dlp primary error ({e}) — attempting Android/iOS/Web multi-client fallback.")
 
-    # ── Step 3.5: Client fallback (visionos, web_embedded fallback) ─
+    # ── Step 3.5: Client fallback (android, ios, web fallback) ─
     if not _downloaded_ok:
         try:
             import yt_dlp  # noqa: PLC0415
-            print("[media_downloader] Retrying with VisionOS / web_embedded client fallback...")
+            _safe_print("[media_downloader] Retrying with Android / iOS / Web client fallback...")
             ydl_opts_fallback = {
-                "format": "best[ext=mp4]/best",
+                "format": f"bestvideo[height<={max_h}]+bestaudio/best[height<={max_h}]/best",
                 "merge_output_format": "mp4",
-                "outtmpl": safe_filename,
+                "outtmpl": outtmpl_pattern,
                 "noplaylist": True,
                 "quiet": False,
                 "no_warnings": False,
-                "extractor_args": {"youtube": {"player_client": ["visionos", "web_embedded"]}},
+                "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
                 "nocheckcertificate": True,
             }
+            if shutil.which("node"):
+                ydl_opts_fallback["js_runtimes"] = {"node": {}}
             cookies_path = _find_cookies_file()
             if cookies_path:
                 ydl_opts_fallback["cookiefile"] = cookies_path
@@ -474,7 +477,7 @@ def download_youtube_video(
                     resolved = ydl.prepare_filename(info)
                     for ext in (".webm", ".mkv", ".m4a"):
                         resolved = resolved.replace(ext, ".mp4")
-                    if os.path.isfile(resolved) and resolved != safe_filename:
+                    if os.path.isfile(resolved):
                         safe_filename = resolved
 
             if not (os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0):
@@ -498,33 +501,35 @@ def download_youtube_video(
 
             if os.path.isfile(safe_filename) and os.path.getsize(safe_filename) > 0:
                 _downloaded_ok = True
-                print(f"[media_downloader] VisionOS client fallback download complete: {safe_filename}")
+                _safe_print(f"[media_downloader] Android/iOS/Web client fallback complete: {safe_filename}")
         except Exception as fb_err:
             last_error_msg = str(fb_err)
-            logger.warning(f"[media_downloader] VisionOS client fallback error: {fb_err}")
+            logger.warning(f"[media_downloader] Android/iOS/Web client fallback error: {fb_err}")
 
-    # ── Step 4: FALLBACK — subprocess with visionos,web_embedded client ───────
+    # ── Step 4: FALLBACK — subprocess with multi-client chain ───────
     if not _downloaded_ok:
-        print("[media_downloader] Trying subprocess fallback with VisionOS/Embedded client...")
+        _safe_print("[media_downloader] Trying subprocess fallback with resilient multi-client chain...")
         cmd = _ytdlp_cmd() + _ytdlp_extra_args() + [
             "-f", format_spec,
             "--merge-output-format", "mp4",
-            "-o", safe_filename,
+            "-o", outtmpl_pattern,
             "--no-playlist",
             url,
         ]
         result = subprocess.run(cmd, capture_output=False)
 
         if result.returncode != 0 or not os.path.isfile(safe_filename):
-            print("[media_downloader] VisionOS primary failed — retrying with standard single stream...")
+            _safe_print("[media_downloader] Primary subprocess failed — retrying with android/ios/web single stream...")
             fallback_cmd = _ytdlp_cmd() + [
-                "--extractor-args", "youtube:player_client=visionos",
+                "--extractor-args", "youtube:player_client=android,ios,web",
                 "-f", "best[ext=mp4]/best",
                 "--merge-output-format", "mp4",
-                "-o", safe_filename,
+                "-o", outtmpl_pattern,
                 "--no-playlist",
                 url,
             ]
+            if shutil.which("node"):
+                fallback_cmd.extend(["--js-runtimes", "node"])
             cookies_path = _find_cookies_file()
             if cookies_path:
                 fallback_cmd.extend(["--cookies", cookies_path])
@@ -538,13 +543,13 @@ def download_youtube_video(
         raise RuntimeError(
             f"yt-dlp failed to download '{url}'{err_hint}.{local_hint} "
             "To bypass YouTube bot challenges on cloud VMs, add your YouTube cookies "
-            "as 'cookies.txt' in the project root or Kaggle Secrets, or use a Google Drive URL / upload a local video."
+            "as 'cookies.txt' in the project root or config folder, or use a Google Drive URL / upload a local video."
         )
 
     final_duration = duration or _probe_duration(safe_filename)
     res_w, res_h = _probe_resolution(safe_filename)
     size_mb = os.path.getsize(safe_filename) / (1024 * 1024)
-    print(f"[media_downloader] Download complete: {safe_filename} ({size_mb:.1f} MB, {final_duration:.1f}s, {res_w}x{res_h})")
+    _safe_print(f"[media_downloader] Download complete: {safe_filename} ({size_mb:.1f} MB, {final_duration:.1f}s, {res_w}x{res_h})")
     if res_h > 0 and res_h < 720:
         logger.warning(
             f"[media_downloader] Notice: Downloaded video resolution is {res_w}x{res_h} (<720p). "
